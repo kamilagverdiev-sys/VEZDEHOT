@@ -1,0 +1,11 @@
+{
+  "name": "VEZDEHOT — игровая платформа",
+  "short_name": "VEZDEHOT",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#080611",
+  "theme_color": "#11081f",
+  "lang": "ru",
+  "description": "Мобильная игровая платформа VEZDEHOT: игры с ботами, комнаты друзей и быстрые партии.",
+  "icons": []
+}

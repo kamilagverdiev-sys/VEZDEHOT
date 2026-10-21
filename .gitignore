@@ -1,0 +1,16 @@
+.codex/
+index.html
+lobby.html
+room.html
+core.js
+core.css
+net.js
+club.js
+cloud.js
+mqtt.min.js
+assets__cards.js
+assets__room.js
+games__durak.html
+games__mafia.html
+games__monopoly.html
+games__poker.html
