@@ -14,3 +14,6 @@ games__durak.html
 games__mafia.html
 games__monopoly.html
 games__poker.html
+upload/
+.env*
+!.env.example

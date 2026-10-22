@@ -16,3 +16,8 @@ The current production build uses lightweight CSS card faces, card backs, table 
 - [roll-a-die](https://github.com/drdreo/dice-roller-3d) — MIT.
 
 No attribution is required for the CC0 sources, but the links are retained here for provenance and future asset updates.
+
+## Bundled dependency
+
+- `@supabase/supabase-js` 2.118.0 — MIT, Supabase Inc. Pinned browser UMD build in `dist/vendor/supabase-2.118.0.js`; license in `dist/vendor/SUPABASE-LICENSE.txt`.
+- Telegram Mini Apps SDK is loaded from Telegram's official server only when launched with a Telegram marker. It is not copied into this repository.
