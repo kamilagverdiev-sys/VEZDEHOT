@@ -275,6 +275,52 @@ test('shipped shared journal renders Mafia round labels and escaped private entr
   delete context.window.VEZDEHOT_GUIDE;
 });
 
+test('postgame review counts actual human ballots and distinguishes ties, exclusions and missing legacy outcomes', () => {
+  const g = fixture('civilian'); g.round = 4;
+  g.voteHistory = [
+    { round: 1, ballots: [{ voter: 0, target: 1 }, { voter: 2, target: 3 }], eliminated: null, message: 'Ничья' },
+    { round: 2, ballots: [{ voter: 0, target: 3 }, { voter: 2, target: 3 }], eliminated: 3, message: 'Доктор выбыл' },
+    { round: 3, ballots: [{ voter: 0, target: 4 }], message: 'Старое сохранение' },
+    { round: 4, ballots: [{ voter: 1, target: 2 }], eliminated: 2, message: 'Наблюдение' }
+  ];
+  assert.equal(run('voteReview()'), '', 'review cannot reveal living roles before the result');
+  g.over = true; g.phase = 'result'; g.players[0].alive = false; g.players[4].alive = false;
+  const output = run('voteReview()');
+  assert.match(output, /Твоих голосов<\/dt><dd>3/); assert.match(output, /Против мафии<\/dt><dd>1/); assert.match(output, /Против города<\/dt><dd>2/);
+  assert.match(output, /Раунд 01 · Мафия/); assert.match(output, /Раунд 02 · Доктор/); assert.match(output, /Раунд 03 · Комиссар/);
+  assert.ok(!output.includes('Раунд 04')); assert.match(output, /никто не выбыл/); assert.match(output, /этот житель выбыл/); assert.match(output, /Итог исключения не сохранён/);
+  assert.ok(!/точность|правильных|неправильных|\d+%/.test(output));
+});
+
+test('review escapes names, attributes another elimination correctly, and handles games without human ballots', () => {
+  const g = fixture(); g.over = true; g.phase = 'result'; g.players[1].name = '<img src=x>'; g.players[2].name = '<script>other</script>';
+  g.voteHistory = [{ round: 1, ballots: [{ voter: 0, target: 1 }], eliminated: 2, message: 'Архив' }];
+  let output = run('voteReview()'); assert.match(output, /выбыл другой житель/); assert.match(output, /&lt;img src=x&gt;/); assert.match(output, /&lt;script&gt;other/); assert.ok(!output.includes('<img')); assert.ok(!output.includes('<script>'));
+  g.voteHistory = [{ round: 1, ballots: [{ voter: 2, target: 1 }], eliminated: 1, message: 'Архив' }]; output = run('voteReview()');
+  assert.match(output, /В сохранённом архиве нет твоих голосов/); assert.match(output, /Твоих голосов<\/dt><dd>0/);
+});
+
+test('displayed bot argument cites a public round and never claims another detective private result', () => {
+  const g = fixture('civilian'); g.round = 2; g.players[6].alive = false;
+  g.voteHistory = [{ round: 1, ballots: [{ voter: 1, target: 6 }], eliminated: 6, message: 'Роль открыта' }];
+  g.knowledge[4] = { 1: 'mafia' }; const reason = run('statementReason(g.players[1],g.players[4])');
+  assert.match(reason, /Раунд 1: Луна → Марс/); assert.match(reason, /Мирный/); assert.match(reason, /не доказательство роли/);
+  g.knowledge[4][1] = 'town'; g.players[1].role = 'doctor'; assert.equal(run('statementReason(g.players[1],g.players[4])'), reason);
+  g.phase = 'day'; g.statements = [{ actor: 4, target: 1, text: 'Версия', context: reason }];
+  const output = run('logs()'); assert.match(output, /Основание версии/); assert.match(output, /Как боты принимают решения/); assert.match(output, /Чужие проверки, твои отметки/);
+});
+
+test('a night ending labels prior statements and ballots by their actual round and inflects vote counts', () => {
+  const g = fixture('civilian'); g.round = 4; g.over = true; g.phase = 'result'; g.settled = true; g.win = true; g.winningTeam = 'town'; g.resultReason = 'Ночной итог';
+  g.statementsRound = 3; g.statements = [{ actor: 1, target: 3, text: 'Прошлая версия', context: '' }];
+  g.ballots = [{ voter: 0, target: 1 }, { voter: 1, target: 3 }, { voter: 2, target: 3 }, { voter: 3, target: 1 }];
+  g.voteHistory = [{ round: 3, ballots: JSON.parse(JSON.stringify(g.ballots)), eliminated: null, message: 'Ничья' }];
+  const output = run('logs()'); assert.match(output, /Версии жителей · день 3/); assert.match(output, /Кто за кого голосовал · раунд 3/); assert.match(output, /4 голоса/); assert.ok(!output.includes('4 голосов'));
+  assert.match(run('resultPanel()'), /Раунд завершения: 4/); assert.ok(!run('resultPanel()').includes('Завершено раундов'));
+  g.ballots[0].target = 2; assert.equal(run('ballotsRound()'), null, 'an unmatched old ballot set must not inherit the ending round');
+  assert.equal(run('voteCount(1)'), '1 голос'); assert.equal(run('voteCount(2)'), '2 голоса'); assert.equal(run('voteCount(5)'), '5 голосов'); assert.equal(run('voteCount(11)'), '11 голосов');
+});
+
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.
 new Function(html.match(/<script>\s*([\s\S]*?)<\/script>/)[1]);
 console.log(`${count} Mafia UI checks passed`);

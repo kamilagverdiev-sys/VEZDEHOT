@@ -62,7 +62,7 @@ test('a corrupt primary recovers the previous validated phase and exposes recove
   assert.equal(next.data.get(backup), previous); assert.equal(next.data.get(primary), '{interrupted');
 });
 test('a parseable but malformed role, array or reference also recovers the backup', () => {
-  for (const mutate of [g => g.players[1].role = 'broken', g => g.privateNotes = null, g => g.ballots = [{ voter: 1, target: 99 }], g => g.knowledge = { 0: null }]) {
+  for (const mutate of [g => g.players[1].role = 'broken', g => g.privateNotes = null, g => g.ballots = [{ voter: 1, target: 99 }], g => g.knowledge = { 0: null }, g => g.ballots = [{ voter: 1, target: 2 }, { voter: 1, target: 3 }], g => g.voteHistory = [1, 1].map(round => ({ round, ballots: [{ voter: 0, target: 1 }], message: 'Duplicate round' }))]) {
     const first = harness(); first.fixture(); first.run('saveState();g.phase="dawn";saveState()');
     const envelope = JSON.parse(first.data.get(primary)); mutate(envelope.payload); first.data.set(primary, JSON.stringify(envelope));
     const next = harness(first.data); next.run('restore()');
@@ -129,5 +129,12 @@ test('personal assumptions migrate from an older game, survive reload and reject
   const recovered = harness(h.data, h.profile); recovered.run('restore()');
   assert.equal(recovered.store.status('mafia', 'test-user').status, 'recovered'); assert.equal(recovered.context.g.personalMarks[2], 'trust');
   assert.equal(recovered.context.g.personalMarks[3], undefined); assert.deepEqual(Object.keys(recovered.context.g.knowledge), []);
+});
+test('migrating legacy ballots never invents a no-elimination outcome for the factual review', () => {
+  const first = harness(); const g = first.fixture(); first.run('endGame("town","Город победил.")');
+  g.round = 3; g.votes = null; g.ballots = [{ voter: 0, target: 1 }]; delete g.voteHistory; delete g.eliminated;
+  const data = new Map([[legacy, JSON.stringify(g)]]), next = harness(data, first.profile); next.run('restore()');
+  const facts = next.run('playerVoteFacts()'); assert.equal(facts.rows.length, 1); assert.equal(facts.rows[0].round, 2);
+  assert.equal(facts.rows[0].eliminated, undefined); assert.equal(next.context.g.voteHistory[0].eliminated, undefined);
 });
 console.log(`${count} Mafia storage integration checks passed`);

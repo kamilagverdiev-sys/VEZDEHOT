@@ -1,8 +1,8 @@
-const CACHE = 'vezdehot-v12';
+const CACHE = 'vezdehot-v13';
 const ASSETS = [
   './', './index.html', './durak.css', './bunker.css', './lobby.css', './platform.css',
   './poker.html', './poker-equity.js', './mafia.html', './monopoly.html', './manifest.webmanifest',
-  './auth-config.js', './game-store.js', './tab-session.js', './session.css', './game-guide.js', './game-guide.css', './platform.js', './telegram.js', './vendor/supabase-2.118.0.js'
+  './auth-config.js', './game-store.js', './tab-session.js', './session.css', './game-guide.js', './game-guide.css', './opponents.css', './platform.js', './telegram.js', './vendor/supabase-2.118.0.js'
 ];
 const SCOPE = new URL(self.registration.scope);
 const PATHS = new Set(ASSETS.map(path => new URL(path, SCOPE).pathname));

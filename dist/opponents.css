@@ -1,0 +1,18 @@
+/* Public opponent tendencies. These labels describe policy, never a hidden hand. */
+.vh-bot-style{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:3px 7px;border:1px solid #d6dfc622;border-radius:6px;background:#c9d8ae08;color:#b9c6ad;font-size:9px;font-weight:550;line-height:1.45;letter-spacing:.015em;vertical-align:middle;overflow-wrap:anywhere}
+.vh-bot-style:before{content:'';width:4px;height:4px;flex:0 0 4px;border-radius:50%;background:currentColor;opacity:.7}
+.vh-opponents{min-width:0;margin:16px 0;border:1px solid #dbe5d419;border-radius:16px;background:#ffffff03;color:inherit;overflow:hidden}
+.vh-opponents>summary{display:flex;align-items:center;gap:12px;min-height:54px;padding:15px 18px;list-style:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;line-height:1.5}
+.vh-opponents>summary::-webkit-details-marker{display:none}
+.vh-opponents>summary:after{content:'+';font-size:20px;line-height:1;font-weight:400;margin-left:auto;flex:0 0 16px;text-align:center;color:#a8b69a}
+.vh-opponents[open]>summary:after{content:'−'}
+.vh-opponents>summary:focus-visible{outline:2px solid #c6daa6;outline-offset:-4px;border-radius:12px}
+.vh-opponents>summary small{font-size:10px;font-weight:400;color:#a0aa97}
+.vh-opponents>p,.vh-opponents>.vh-opponents-note{font-size:12px;line-height:1.7;color:#a7afa0;margin:0;padding:0 18px 17px;overflow-wrap:anywhere}
+.vh-opponent-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:8px;list-style:none;margin:0;padding:0 12px 12px}
+.vh-opponent-row{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;padding:16px;border:1px solid #d6dfc612;border-radius:11px;background:#ffffff03;overflow-wrap:anywhere}
+.vh-opponent-row strong,.vh-opponent-row b{font-size:12px;font-weight:650;line-height:1.45;color:inherit}
+.vh-opponent-row p{margin:0;color:#aab4a0;font-size:12px;line-height:1.75}
+.vh-opponent-row small{font-size:10px;line-height:1.65;color:#9ca990}
+.vh-opponent-row .vh-bot-style{font-size:9px}
+@media(max-width:480px){.vh-opponents>summary{padding:14px}.vh-opponents>p,.vh-opponents>.vh-opponents-note{padding-left:14px;padding-right:14px}.vh-opponent-list{grid-template-columns:1fr;padding:0 9px 9px;gap:6px}.vh-opponent-row{padding:14px}.vh-bot-style{font-size:9px;padding:2px 5px}}

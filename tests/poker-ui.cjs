@@ -44,7 +44,7 @@ async function harness({ store = new Map(), failRecord = false, scope = 'guest',
     console, Date, Promise, AbortController, CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
     Math: Object.assign(Object.create(Math), { random() { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; } }),
     document,
-    window: { VEZDEHOT: platform, VEZDEHOT_TAB_SESSION: { canWrite: () => owner }, matchMedia: () => ({ matches: true }), addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); } },
+    window: { PokerEquity: require('../dist/poker-equity.js'), VEZDEHOT: platform, VEZDEHOT_TAB_SESSION: { canWrite: () => owner }, matchMedia: () => ({ matches: true }), addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); } },
     localStorage: { getItem: key => store.get(key) || null, setItem(key, value) { if (failStorage) { const error = new Error('Quota exceeded'); error.name = 'QuotaExceededError'; throw error; } store.set(key, String(value)); }, removeItem(key) { if (failStorage) throw new Error('Storage unavailable'); store.delete(key); } },
     setTimeout(fn) { const id = ++nextTimer; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
     __rendered() { renderCount++; }
@@ -55,7 +55,7 @@ render = function () { document.rendered = saveNotice() + (g ? controls() : intr
 window.__poker = { get g() { return g; }, get error() { return error; }, get accountChanging() { return accountChanging; },
   startHand, nextHand, closeTable, syncResult, commitUI, saveHand, saveNotice, controls, notice, bind, boot, takeAction, continueHand, togglePause, canPlay,
   pokerNewGame, pokerAction, pokerFinish, pokerContinue, legalActions, tableFinished,
-  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
+  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, pokerOpponents, pokerBotStyle, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
   vm.createContext(context);
@@ -343,6 +343,13 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     const logs=h.api.pokerJournals();assert.deepEqual([...logs.matchAll(/Событие (\d+)</g)].map(match=>Number(match[1])),Array.from({length:30},(_,i)=>30-i));assert.match(logs,/30 событий/);assert.match(logs,/data-key="journal-poker-hand-history"/);
     g.history=['<img src=x onerror=alert(1)>'];const single=h.api.pokerJournals();assert.match(single,/1 событие/);assert.ok(!single.includes('<img'));assert.match(single,/&lt;img/);
     finishWithHumanWinner(h);assert.match(h.api.pokerJournals(),/Раздача №1/);h.api.nextHand();const next=h.api.pokerJournals();assert.equal((next.match(/Раздача №1/g)||[]).length,1);
+  });
+  await test('opponent style labels are stable, readable and never reveal hidden hand strength', async () => {
+    const h=await harness();h.click('[data-start]');const g=h.api.g,markup=h.api.pokerOpponents();
+    for(const label of ['Осторожный','Напористый','Позиционный'])assert.ok(markup.includes(label));
+    assert.match(markup,/data-key="poker-opponents"/);assert.match(markup,/Соперники за столом/);assert.match(markup,/приблизительный расчёт/);assert.match(markup,/будущая колода им недоступны/);
+    g.players.slice(1).forEach(player=>Object.defineProperty(player,'hand',{configurable:true,get(){throw new Error('Opponent explanation read hidden hand')}}));assert.equal(h.api.pokerOpponents(),markup);
+    g.players[1].name='<img src=x onerror=alert(1)>';const escaped=h.api.pokerOpponents();assert.ok(!escaped.includes('<img'));assert.match(escaped,/&lt;img/);
   });
   new Function(inline);
   console.log(`${count} poker lifecycle UI checks passed`);
