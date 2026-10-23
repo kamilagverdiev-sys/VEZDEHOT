@@ -1,4 +1,4 @@
-const CACHE = 'vezdehot-v13';
+const CACHE = 'vezdehot-v14';
 const ASSETS = [
   './', './index.html', './durak.css', './bunker.css', './lobby.css', './platform.css',
   './poker.html', './poker-equity.js', './mafia.html', './monopoly.html', './manifest.webmanifest',

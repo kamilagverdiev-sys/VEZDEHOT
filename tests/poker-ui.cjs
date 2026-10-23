@@ -326,6 +326,7 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     g.toAct=1;const waiting=plain(h.api.pokerContext());g.players.slice(1).forEach(player=>player.hand=[{id:'unknown-hidden-card'}]);assert.deepEqual(plain(h.api.pokerContext()),waiting);g.toAct=0;assert.deepEqual(plain(h.api.pokerContext()),hint);
     g.paused=true;h.api.view();assert.deepEqual(plain(h.api.pokerContext()),hint,'pausing the real view preserves the chosen raise and its visible action math');
     g.players[0].chips=30;assert.match(h.api.pokerContext().text,/колл добавит 30/);assert.match(h.api.pokerContext().text,/короткий ва-банк/);assert.ok(!h.api.pokerContext().text.includes('Рейз до'));
+    Object.assign(g.players[0],{roundBet:0,chips:1000});h.api.setRaise(340);const uncommitted=h.api.pokerContext().text;assert.match(uncommitted,/Рейз до 340.*добавит 340 фишек\./);assert.ok(!uncommitted.includes('а не'),'a new wager does not contrast identical amounts');
   });
   await test('mini-lesson solutions agree with the shipped call, best-five and side-pot engines', async () => {
     const h=await harness(),lessons=h.api.pokerLessons();assert.equal(new Set(lessons.map(x=>x.id)).size,3);assert.ok(lessons.every(x=>x.choices.filter(choice=>choice.correct).length===1&&x.choices.every(choice=>choice.feedback)));

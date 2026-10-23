@@ -365,3 +365,69 @@ test('journal and contextual tip escape HTML and handle empty or malformed rows'
   const empty = h.api.journal({entries: [], empty: attack}); assert.match(empty, /vh-journal-empty/); assert.match(empty, /&lt;img/);
   assert.equal(h.api.tip({title: 'No text'}), ''); assert.deepEqual(h.effects, []);
 });
+
+function walkthroughFixture(overrides={}){
+  const calls={create:0,act:[],view:0};
+  const adapter={title:'Учебная раздача от первого хода до итога',label:'Раздача',
+    create(){calls.create++;return {step:1,moves:[]}},
+    view(state){calls.view++;return {step:state.step,total:3,title:'Этап '+state.step,text:'Заданные карты, самостоятельное решение.',done:state.step===3,
+      groups:[{label:'Твоя рука',cards:[{rank:'A',suit:'♠'},{rank:'Q',suit:'♥'}]},{label:'Соперник',cards:[{hidden:true,get rank(){throw Error('Hidden rank accessed')},get suit(){throw Error('Hidden suit accessed')}}]}],
+      metrics:[{label:'Учебный банк',value:state.moves.length*40}],choices:[{id:'move',label:'Колл 40'},{id:'blocked',label:'Недоступный ход',disabled:true}],
+      feedback:state.moves.length?{title:'Ход выполнен',text:state.moves.join(' → ')}:undefined,recap:state.step===3?[{title:'Итог',text:'Две последовательные ставки'}]:[]}},
+    act(state,id){calls.act.push(id);state.moves.push(id);state.step++;return state},...overrides};return {adapter,calls};
+}
+
+test('walkthrough starts lazily, renders public cards, and keeps progress across tabs',()=>{
+  const h=harness(),f=walkthroughFixture();h.api.open(fixture({walkthrough:f.adapter}));
+  assert.equal(f.calls.create,0);button(h,'[data-guide-tab="walkthrough"]').click();assert.equal(f.calls.create,1);
+  assert.equal(h.dialog.querySelectorAll('.vh-walk-card').length,3);assert.equal(h.dialog.querySelectorAll('[aria-label="Закрытая карта"]').length,1);
+  const first=button(h,'[data-walk-action="move"]');first.click();assert.equal(f.calls.act.length,1);assert.match(visibleText(h.dialog),/Этап 2/);
+  first.onclick();assert.equal(f.calls.act.length,1,'detached prior action must not act on next step');
+  button(h,'[data-guide-tab="rules"]').click();const current=button(h,'[data-walk-action="move"]');current.onclick();assert.equal(f.calls.act.length,1,'hidden panel action is inert');
+  button(h,'[data-guide-tab="walkthrough"]').click();assert.equal(f.calls.create,1);assert.match(visibleText(h.dialog),/Этап 2/);assert.deepEqual(h.effects,[]);
+});
+
+test('walkthrough ignores disabled actions, completes with recap, and resets only its own state',()=>{
+  const h=harness(),f=walkthroughFixture();h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));
+  const blocked=button(h,'[data-walk-action="blocked"]');blocked.onclick();assert.equal(f.calls.act.length,0);
+  const restart=button(h,'[data-walk-restart]');button(h,'[data-walk-action="move"]').click();restart.onclick();assert.equal(f.calls.create,1,'stale restart cannot reset a later step');
+  const last=button(h,'[data-walk-action="move"]');last.click();assert.match(visibleText(h.dialog),/Разбор завершён/);assert.match(visibleText(h.dialog),/Две последовательные ставки/);
+  assert.equal(h.dialog.querySelectorAll('[data-walk-action]').length,0);last.onclick();assert.equal(f.calls.act.length,2);
+  button(h,'[data-walk-restart]').click();assert.equal(f.calls.create,2);assert.match(visibleText(h.dialog),/Этап 1/);assert.deepEqual(h.effects,[]);
+});
+
+test('failed walkthrough actions roll back mutated candidate state and keep close usable',()=>{
+  const f=walkthroughFixture({act(state){state.step=3;state.moves.push('bad');throw Error('Test action error')}}),h=harness();
+  h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));button(h,'[data-walk-action="move"]').click();
+  assert.match(visibleText(h.dialog),/ход не выполнен/);assert.match(visibleText(h.dialog),/Этап 1/);assert.doesNotMatch(visibleText(h.dialog),/bad|Разбор завершён/);
+  button(h,'[data-guide-close]').click();assert.equal(h.dialog,null);assert.deepEqual(h.effects,[]);
+});
+
+test('malformed walkthrough state or views fail locally and allow a fresh restart',()=>{
+  const h=harness();let fail=true;
+  const f=walkthroughFixture({create(){if(fail)throw Error('Cannot create');return {step:1,moves:[]}}});
+  h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));assert.match(visibleText(h.dialog),/Не удалось открыть/);assert.ok(button(h,'[data-walk-restart]'));
+  fail=false;button(h,'[data-walk-restart]').click();assert.ok(button(h,'[data-walk-action="move"]'));
+  h.api.open(fixture({walkthrough:{...f.adapter,view:()=>({step:1,total:2,title:'Invalid',text:'Broken',done:false,choices:[{id:'x',label:'A'},{id:'x',label:'B'}]})},initialTab:'walkthrough'}));
+  assert.match(visibleText(h.dialog),/Не удалось открыть/);assert.equal(h.dialog.querySelectorAll('[data-walk-action]').length,0);button(h,'[data-guide-close]').click();assert.equal(h.dialog,null);
+});
+
+test('closing, replacing, or losing ownership invalidates every old walkthrough action',()=>{
+  for(const reason of ['close','account','ownership','replace']){
+    const h=harness(),f=walkthroughFixture();let closes=0;
+    h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough',onClose:()=>closes++}));
+    const action=button(h,'[data-walk-action="move"]'),restart=button(h,'[data-walk-restart]'),tab=button(h,'[data-guide-tab="walkthrough"]');
+    if(reason==='close')button(h,'[data-guide-close]').click();
+    else if(reason==='replace')h.api.open(fixture());
+    else {if(reason==='ownership')h.controls.owner=false;h.document.dispatchEvent({type:reason==='account'?'vezdehot:accountchange':'vezdehot:sessionlost'})}
+    action.onclick();restart.onclick();tab.onclick();assert.equal(f.calls.act.length,0);assert.equal(f.calls.create,1);assert.equal(closes,reason==='close'?1:0);assert.deepEqual(h.effects,[]);
+  }
+});
+
+test('walkthrough copy remains literal text and all four tabs work from the keyboard',()=>{
+  const h=harness(),attack='<img src=x onerror="bad()">',f=walkthroughFixture();
+  const base=f.adapter.view;f.adapter.view=state=>({...base(state),title:attack,text:attack,groups:[{label:attack,cards:[{rank:'A',suit:'♠'}]}],metrics:[{label:attack,value:attack}],feedback:{title:attack,text:attack},recap:[{title:attack,text:attack}]});
+  h.api.open(fixture({walkthrough:f.adapter}));const now=button(h,'[data-guide-tab="now"]');now.focus();now.dispatchEvent({type:'keydown',key:'End'});
+  assert.equal(h.document.activeElement,button(h,'[data-guide-tab="walkthrough"]'));assert.match(visibleText(h.dialog),/<img src=x/);assert.equal(h.dialog.querySelector('img,script'),null);
+  const walk=button(h,'[data-guide-tab="walkthrough"]');walk.dispatchEvent({type:'keydown',key:'ArrowRight'});assert.equal(h.document.activeElement,now);assert.deepEqual(h.effects,[]);
+});
