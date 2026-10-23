@@ -29,6 +29,7 @@
   <link rel="stylesheet" href="./bunker.css?v=7">
   <link rel="stylesheet" href="./platform.css">
   <link rel="stylesheet" href="./session.css">
+  <link rel="stylesheet" href="./game-guide.css">
   <link rel="stylesheet" href="./lobby.css">
 </head>
 <body>
@@ -38,6 +39,7 @@
   <script src="./auth-config.js"></script>
   <script src="./game-store.js"></script>
   <script src="./tab-session.js"></script>
+  <script src="./game-guide.js"></script>
   <script src="./platform.js"></script>
   <script src="./telegram.js" defer></script>
   <script>
@@ -70,6 +72,9 @@
           if(g.deck.length>36||g.table.some(p=>!p||!validCard(p.a)||(p.d&&!validCard(p.d))))return false;
           if(g.finished!==undefined&&(!Array.isArray(g.finished)||!unique(g.finished)||g.finished.some(i=>!integer(i,0,g.players.length-1))))return false;
           if(g.trumpCard!=null&&!validCard(g.trumpCard))return false;
+          if(g.journal!==undefined){const publicCard=c=>c&&['6','7','8','9','10','J','Q','K','A'].includes(c.rank)&&['♠','♥','♦','♣'].includes(c.suit)&&Object.keys(c).every(k=>['rank','suit'].includes(k));
+            if(!Array.isArray(g.journal)||g.journal.length>80||g.journal.some(e=>!e||!integer(e.round,1,g.round)||!['start','attack','defense','take','discard','draw','next','out','end'].includes(e.kind)||Object.keys(e).some(k=>!['round','kind','actor','card','against','count'].includes(k))||!(e.kind==='end'&&e.actor===null)&&!integer(e.actor,0,g.players.length-1)||['attack','defense'].includes(e.kind)&&!publicCard(e.card)||e.kind==='defense'&&!publicCard(e.against)||['take','discard','draw'].includes(e.kind)&&!integer(e.count,1,36)))return false;
+          }
           normalizeDurakGame(g);
           const cards=[...g.deck,...g.players.flatMap(p=>p.hand),...g.table.flatMap(p=>p.d?[p.a,p.d]:[p.a])];
           if(cards.some(c=>!validCard(c))||!unique(cards.map(c=>c.id))||!integer(g.discardCount,0,36)||cards.length+g.discardCount!==36)return false;
@@ -142,7 +147,7 @@
     function code(){const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let x='';for(let i=0;i<6;i++)x+=a[Math.floor(Math.random()*a.length)];return x}
     function top(title,back){return `<header class="top">${back?`<button class="back" data-back>${back}</button>`:''}<div class="brand">VEZDEHOT</div><div class="top-title">${title||'Клуб'}</div><div class="grow"></div><div class="balance"><span class="coin">V</span>${fmt(s.balance)}</div><button class="icon-btn" data-help aria-label="Как играть" title="Как играть">?</button><button class="icon-btn" data-settings aria-label="Профиль">${esc(s.avatar||'✦')}</button></header>`}
     function bindTop(){const t=$('[data-theme]');if(t)t.onclick=()=>{s.theme=s.theme==='light'?'dark':'light';document.documentElement.dataset.theme=s.theme;save();render()};const set=$('[data-settings]');if(set)set.onclick=()=>settings();const help=$('[data-help]');if(help)help.onclick=()=>helpModal();const back=$('[data-back]');if(back)back.onclick=()=>{const from=s.view;if(from==='game')clearDurakTimer();s.view=(from==='game'||from==='bunker')?'room':'lobby';clearDurakTimer();save();render()}}
-    function render(){document.documentElement.dataset.theme='dark';const app=$('#app');if(s.view==='game'&&s.game){updateDurakView(app);bindGame();bindMainSaveNotice(app);return}app.innerHTML=s.view==='lobby'?lobby():s.view==='room'?room():s.view==='bunker'?bunkerView():lobby();bindTop();if(s.view==='lobby')bindLobby();if(s.view==='room')bindRoom();if(s.view==='bunker')bindBunker();bindMainSaveNotice(app)}
+    function render(){document.documentElement.dataset.theme='dark';const app=$('#app');if(s.view==='game'&&s.game){updateDurakView(app);bindGame();bindMainSaveNotice(app);return}const openedDetails=new Set([...app.querySelectorAll('details[data-key][open]')].map(node=>node.dataset.key));app.innerHTML=s.view==='lobby'?lobby():s.view==='room'?room():s.view==='bunker'?bunkerView():lobby();app.querySelectorAll('details[data-key]').forEach(node=>{if(openedDetails.has(node.dataset.key))node.open=true});bindTop();if(s.view==='lobby')bindLobby();if(s.view==='room')bindRoom();if(s.view==='bunker')bindBunker();bindMainSaveNotice(app)}
     function lobby(){
       const p=window.VEZDEHOT?.getProfile?.()||s,account=window.VEZDEHOT?.account?.(),signed=!!account?.user;
       const xp=Math.max(0,Number(p.xp)||0),level=Math.floor(xp/300)+1,progress=xp%300,canBonus=Date.now()-(Number(p.bonusAt)||0)>=86400000;
@@ -211,7 +216,7 @@
       if(!g||!Array.isArray(g.players)||!Array.isArray(g.deck))return g;
       const legacy=g.engineVersion!==DURAK_ENGINE_VERSION;
       g.id=g.id||durakId();g.table=g.table||[];g.finished=Array.isArray(g.finished)?g.finished:[];
-      g.draw=!!g.draw;g.paused=!!g.paused;
+      g.draw=!!g.draw;g.paused=!!g.paused;g.journal=Array.isArray(g.journal)?g.journal:[];
       if(legacy&&g.resolve?.took&&g.resolve.prepared){
         // Earlier builds put taken cards in the hand before clearing the table.
         // Undo that staging once; the next-round transition will transfer them.
@@ -254,18 +259,20 @@
     function newGame(r){
       const d=shuffle(deck()),players=[{name:s.nick,face:'🙂',kind:'human',hand:[]},...Array.from({length:r.bots},(_,i)=>({name:botNames[i],face:avatars[i],kind:'bot',hand:[]}))];
       for(let card=0;card<6;card++)players.forEach(p=>p.hand.push(d.pop()));
-      const g={engineVersion:DURAK_ENGINE_VERSION,id:durakId(),players,deck:d,trump:d[0].suit,trumpCard:{...d[0]},attacker:0,defender:1,phase:'attack',table:[],roundLimit:null,selected:null,message:'',diff:r.diff,stake:r.stake,round:1,over:false,winner:null,loser:null,draw:false,finished:[],discardCount:0,lastCard:null,lastPair:null,resolve:null,pendingRound:null,paused:false,settled:false};
+      const g={engineVersion:DURAK_ENGINE_VERSION,id:durakId(),players,deck:d,trump:d[0].suit,trumpCard:{...d[0]},attacker:0,defender:1,phase:'attack',table:[],roundLimit:null,selected:null,message:'',diff:r.diff,stake:r.stake,round:1,over:false,winner:null,loser:null,draw:false,finished:[],discardCount:0,lastCard:null,lastPair:null,resolve:null,pendingRound:null,paused:false,settled:false,journal:[]};
       let lowest=Infinity;
       players.forEach((p,i)=>{sortHand(p.hand,g);for(const c of p.hand){const value=ranks.indexOf(c.rank);if(isTrump(c,g)&&value<lowest){lowest=value;g.attacker=i}}});
       if(lowest===Infinity)g.attacker=Math.floor(Math.random()*players.length);
       g.defender=(g.attacker+1)%players.length;
       g.message=lowest===Infinity?'Ни у кого нет козырей. Первый ход выбран случайно: '+players[g.attacker].name:g.attacker===0?'У тебя младший козырь. Выбери карту для атаки':players[g.attacker].name+' начинает: у него младший козырь';
-      return g;
+      durakLog(g,'start',{actor:g.attacker});return g;
     }
+    function durakLog(g,kind,details={}){if(!g)return;const entry={round:g.round,kind,...details};if(!Array.isArray(g.journal))g.journal=[];g.journal.push(entry);if(g.journal.length>80)g.journal.splice(0,g.journal.length-80)}
+    function publicDurakCard(c){return {rank:c.rank,suit:c.suit}}
     function isTrump(c,g){return !!c&&c.suit===g.trump}
     function beats(def,atk,g){if(!def||!atk)return false;if(def.suit===atk.suit)return ranks.indexOf(def.rank)>ranks.indexOf(atk.rank);return isTrump(def,g)&&!isTrump(atk,g)}
     function sortHand(h,g){h.sort((a,b)=>(isTrump(a,g)?1:0)-(isTrump(b,g)?1:0)||suits.findIndex(x=>x[0]===a.suit)-suits.findIndex(x=>x[0]===b.suit)||ranks.indexOf(a.rank)-ranks.indexOf(b.rank))}
-    function drawUp(i,g){if(g.finished.includes(i))return;while(g.players[i].hand.length<6&&g.deck.length)g.players[i].hand.push(g.deck.pop());sortHand(g.players[i].hand,g)}
+    function drawUp(i,g){if(g.finished.includes(i))return;const before=g.players[i].hand.length;while(g.players[i].hand.length<6&&g.deck.length)g.players[i].hand.push(g.deck.pop());sortHand(g.players[i].hand,g);const count=g.players[i].hand.length-before;if(count)durakLog(g,'draw',{actor:i,count})}
     function botCard(i,g){
       const h=g.players[i].hand.slice().sort((a,b)=>(isTrump(a,g)?1:0)-(isTrump(b,g)?1:0)||ranks.indexOf(a.rank)-ranks.indexOf(b.rank));
       if(g.diff==='easy'&&Math.random()<.4)return h[Math.floor(Math.random()*h.length)];
@@ -327,20 +334,21 @@
       clearDurakTimer();const a=pending.attacker,d=pending.defender,took=pending.took;
       const cards=g.table.flatMap(pair=>pair.d?[pair.a,pair.d]:[pair.a]);
       if(took)g.players[d].hand.push(...cards);else g.discardCount+=cards.length;
+      durakLog(g,took?'take':'discard',{actor:d,count:cards.length});
       g.lastRound={took,count:cards.length,attacker:a,defender:d};
       g.lastCard=null;g.lastPair=null;g.table=[];g.resolve=null;g.pendingRound=null;g.roundLimit=null;g.selected=null;
       // Attacker draws first; the defender draws last.
       for(let step=0;step<g.players.length;step++){const i=(a+step)%g.players.length;if(i!==d)drawUp(i,g)}
       drawUp(d,g);
-      if(!g.deck.length)g.players.forEach((p,i)=>{if(!p.hand.length&&!g.finished.includes(i))g.finished.push(i)});
+      if(!g.deck.length)g.players.forEach((p,i)=>{if(!p.hand.length&&!g.finished.includes(i)){g.finished.push(i);durakLog(g,'out',{actor:i})}});
       const active=g.players.map((_,i)=>i).filter(i=>!g.finished.includes(i));
       if(active.length<=1){
         g.over=true;g.phase='over';g.draw=active.length===0;g.loser=g.draw?null:active[0];
-        g.winner=g.draw?null:g.finished.includes(0)?0:g.finished[0]??null;
+        g.winner=g.draw?null:g.finished.includes(0)?0:g.finished[0]??null;durakLog(g,'end',{actor:g.loser});
         g.message=g.draw?'Ничья — ни у кого не осталось карт':g.loser===0?'Ты остался с картами. Попробуем ещё?':'Ты вышел из игры без карт. Победа!';settle(g);return;
       }
       g.attacker=took?nextDurakPlayer(g,d):g.finished.includes(d)?nextDurakPlayer(g,d):d;
-      g.defender=nextDurakPlayer(g,g.attacker);g.phase='attack';g.round++;
+      g.defender=nextDurakPlayer(g,g.attacker);g.phase='attack';g.round++;durakLog(g,'next',{actor:g.attacker});
       g.message=took?g.players[d].name+' пропускает ход. Атакует '+g.players[g.attacker].name:g.finished.includes(d)?g.players[d].name+' вышел без карт. Следующим атакует '+g.players[g.attacker].name:g.players[g.attacker].name+' отбился и начинает атаку';
       save();render();advance();
     }
@@ -355,19 +363,19 @@
       const g=s.game;if(!g||s.view!=='game'||g.over||g.paused||g.attacker!==0||g.players[0].kind!=='human'||g.selected===null||!['attack','resolve'].includes(g.phase)||g.resolve?.took)return;
       const p=g.players[0],c=p.hand[g.selected];if(!canAddAttack(c,g))return toast('Можно подкинуть только достоинство, которое есть на столе','bad');
       clearDurakTimer();if(!g.table.length)g.roundLimit=Math.min(6,g.players[g.defender].hand.length);
-      p.hand.splice(g.selected,1);g.table.push({a:c,d:null});g.lastPair=null;g.selected=null;g.resolve=null;g.phase='defend';
+      p.hand.splice(g.selected,1);g.table.push({a:c,d:null});durakLog(g,'attack',{actor:0,card:publicDurakCard(c)});g.lastPair=null;g.selected=null;g.resolve=null;g.phase='defend';
       g.message=g.players[g.defender].name+' выбирает, чем отбиться';save();render();advance();
     }
     function humanDefend(){if(typeof mainWritable==='function'&&!mainWritable())return;
       const g=s.game;if(!g||s.view!=='game'||g.over||g.paused||g.phase!=='defend'||g.defender!==0||g.selected===null)return;
       const p=g.players[0],pair=g.table[g.table.length-1],c=p.hand[g.selected];if(!pair||pair.d||!beats(c,pair.a,g))return toast('Этой картой нельзя побить атаку','bad');
-      clearDurakTimer();p.hand.splice(g.selected,1);pair.d=c;g.selected=null;showResolve(g,false);
+      clearDurakTimer();p.hand.splice(g.selected,1);pair.d=c;durakLog(g,'defense',{actor:0,card:publicDurakCard(c),against:publicDurakCard(pair.a)});g.selected=null;showResolve(g,false);
     }
     function humanTake(){if(typeof mainWritable==='function'&&!mainWritable())return;const g=s.game;if(!g||s.view!=='game'||g.over||g.paused||g.phase!=='defend'||g.defender!==0)return;showResolve(g,true)}
     function botDefend(){if(typeof mainWritable==='function'&&!mainWritable())return;
       const g=s.game;if(!g||s.view!=='game'||g.over||g.paused||document.hidden||g.phase!=='defend'||g.players[g.defender].kind!=='bot')return;
       clearDurakTimer();const i=g.defender,c=chooseDefense(i,g);
-      if(c){g.players[i].hand.splice(g.players[i].hand.indexOf(c),1);g.table[g.table.length-1].d=c;showResolve(g,false)}else showResolve(g,true);
+      if(c){g.players[i].hand.splice(g.players[i].hand.indexOf(c),1);g.table[g.table.length-1].d=c;durakLog(g,'defense',{actor:i,card:publicDurakCard(c),against:publicDurakCard(g.table[g.table.length-1].a)});showResolve(g,false)}else showResolve(g,true);
     }
     function botAttack(){if(typeof mainWritable==='function'&&!mainWritable())return;
       const g=s.game;if(!g||s.view!=='game'||g.over||g.paused||document.hidden||g.phase!=='attack'||g.players[g.attacker].kind!=='bot')return;
@@ -378,7 +386,7 @@
         if(!options.length||Math.random()<stopChance){endRound(g,false);return}
         c=options[0];
       }else{c=botCard(i,g);if(!c)return;g.roundLimit=Math.min(6,g.players[g.defender].hand.length)}
-      p.hand.splice(p.hand.indexOf(c),1);g.table.push({a:c,d:null});g.lastPair=null;g.resolve=null;g.selected=null;g.phase='defend';
+      p.hand.splice(p.hand.indexOf(c),1);g.table.push({a:c,d:null});durakLog(g,'attack',{actor:i,card:publicDurakCard(c)});g.lastPair=null;g.resolve=null;g.selected=null;g.phase='defend';
       g.message=g.defender===0?'Твоя защита: выбери карту или забери карты':g.players[g.defender].name+' выбирает, чем отбиться';save();render();advance();
     }
     function advance(){if(typeof mainWritable==='function'&&!mainWritable())return;
@@ -456,7 +464,21 @@
     function bunkerSelectionText(g){if(g.phase==='reveal'){const c=g.players[0].cards[g.selectedCard];return c&&!c.revealed?'Откроешь всем: '+c.label+' — '+c.title:'Выбери одну закрытую карту ниже. Остальные останутся тайной.'}if(g.phase==='vote'){const p=g.players[g.selectedVote];return p?.alive?'Твой голос против: '+p.name+'. Нажми «Подтвердить голос», чтобы отправить.':'Выбери кандидата ниже. Нажатие на карточку ещё не отправляет голос.'}return ''}
     function paintBunkerSelection(){const g=s.game,note=$('[data-bunker-selection]');if(note)note.textContent=bunkerSelectionText(g);const reveal=$('[data-bunker-reveal]');if(reveal)reveal.disabled=g.selectedCard===null;const vote=$('[data-bunker-confirm-vote]');if(vote)vote.disabled=g.selectedVote===null}
     function bunkerOutcome(g){const win=g.result==='survived',last=g.lastVote,reason=win?'Ты прошёл три голосования и занял одно из трёх мест.':last?.out===0?`Против тебя: ${last.count} ${bunkerVoteWord(last.count)}.${last.tied?.length>1?' При равенстве голосов тебя выбрала жеребьёвка.':' Это наибольшее число голосов в раунде.'}`:'Тебя исключили голосованием.';return `<section class="b2-result" aria-label="Результат партии" data-bunker-outcome tabindex="-1"><span class="b2-kicker">${win?'МЕСТО ПОДТВЕРЖДЕНО':'ПАРТИЯ ОКОНЧЕНА'}</span><h2>${win?'Ты в тройке выживших!':'Ты выбыл из бункера'}</h2><p>${esc(reason)}${win?' Вместе с тобой: '+g.players.filter(p=>p.alive&&p!==g.players[0]).map(p=>esc(p.name)).join(' · ')+'.':''}</p><dl class="b2-result-stats"><div><dt>Вход</dt><dd>100 V</dd></div><div><dt>Возвращено</dt><dd>${win?'250':'0'} V</dd></div><div><dt>Чистый итог</dt><dd class="${win?'is-positive':'is-negative'}">${win?'+150':'−100'} V</dd></div><div><dt>Опыт</dt><dd>+${win?'120':'25'} XP</dd></div></dl><div class="room-actions">${g.settled?'<button class="btn primary" data-bunker-new>Ещё партия · 100 V</button>':'<button class="btn primary" data-bunker-save-result>Сохранить результат</button>'}<button class="btn" data-bunker-settings>Настройки</button><button class="btn" data-bunker-lobby>В лобби</button></div><p class="b2-replay-note">${g.settled?'Та же сложность, новые персонажи и сценарий. Вход спишется только после нажатия.':'Результат пока не записан на устройство. Повтори сохранение перед новой партией.'}</p></section>`}
-    function bunkerChronicle(g){if(!g.voteLog?.length)return '';return `<details class="b2-chronicle"><summary>Как шла партия <span>${g.voteLog.length} / 3 голосования</span></summary><ol>${g.voteLog.map(v=>`<li><b>Раунд ${v.round}</b><span>${esc(g.players[v.out]?.name||'Кандидат')} выбыл · ${v.count} ${bunkerVoteWord(v.count)}${v.tied?.length>1?' · жеребьёвка':''}</span>${bunkerBallots(g,v)}</li>`).join('')}</ol></details>`}
+    function bunkerGoal(g){
+      if(!g)return {title:'Сначала познакомься с правилами',text:'В партии шесть кандидатов и три места. В каждом раунде раскрывается одна характеристика, затем группа голосует против одного участника.'};
+      if(g.over)return {title:'Партия завершена',text:g.result==='survived'?'Ты занял одно из трёх мест. Журнал показывает раскрытые характеристики и реальные голоса.':'Тебя исключили голосованием. Посмотри подсчёт голосов и жеребьёвку, если была ничья.'};
+      if(g.phase==='reveal')return {title:'Сейчас — открыть одну карту',text:'Выбери одну свою закрытую характеристику и нажми «Раскрыть карту». База плюс 2 за потребность сценария и 3 за приоритет раунда — это текущая польза карты. Другие твои карты останутся скрыты.'};
+      if(g.phase==='vote'){const target=g.players[g.selectedVote];return {title:'Сейчас — подтвердить голос',text:(target?.alive?'Выбран '+target.name+'. Открытая польза: '+bunkerScore(target,g)+'. ':'')+'Сравни раскрытые характеристики. Нажатие на кандидата только выбирает его; голос отправляется кнопкой «Подтвердить голос». Баллы не раскрывают скрытые карты и не гарантируют решение ботов.'}}
+      return {title:'Сейчас — проверить итоги раунда',text:'Посмотри, кто за кого проголосовал. Выбывает кандидат с наибольшим числом голосов; при равенстве — случайный выбор среди лидеров. Следующий этап начнётся только после твоего нажатия.'};
+    }
+    function bunkerJournalEntries(g){const entries=[];for(let round=1;round<=g.round;round++){
+      g.players.forEach(p=>p.cards.filter(c=>c.revealed&&c.revealedRound===round).forEach(c=>entries.push({label:'Раунд '+round+' · раскрытие',text:p.name+' раскрывает: '+c.label+' — '+c.title+'.'})));
+      for(const v of (g.voteLog||[]).filter(v=>v.round===round)){for(const b of v.ballots||[])entries.push({label:'Раунд '+round+' · голос',text:(g.players[b.from]?.name||'Кандидат')+' → '+(g.players[b.to]?.name||'Кандидат')+'.'});
+        entries.push({label:'Раунд '+round+' · итог',text:(g.players[v.out]?.name||'Кандидат')+' выбывает: '+v.count+' '+bunkerVoteWord(v.count)+'.'+(v.tied?.length>1?' Равенство у '+v.tied.map(i=>g.players[i]?.name||'Кандидат').join(', ')+'. Решено равной жеребьёвкой.':'')});
+      }
+    }if(g.over)entries.push({label:'Партия завершена',text:g.result==='survived'?'В бункере остаются: '+g.players.filter(p=>p.alive).map(p=>p.name).join(', ')+'.':'Ты выбыл из бункера. Голосования для тебя закончились.'});return entries}
+    function bunkerLearning(g){const context=bunkerGoal(g),tip=typeof window!=='undefined'&&window.VEZDEHOT_GUIDE?.tip?window.VEZDEHOT_GUIDE.tip(context):'';return `<section class="b2-learning" aria-label="Подсказка к этапу">${tip}<button class="b2-learn-button" data-bunker-tutor>Правила и 3 коротких задания <span aria-hidden="true">↗</span></button></section>`}
+    function bunkerChronicle(g){if(typeof window!=='undefined'&&window.VEZDEHOT_GUIDE?.journal)return window.VEZDEHOT_GUIDE.journal({id:'bunker-rounds-'+g.id,title:'Журнал партии',entries:bunkerJournalEntries(g).reverse(),empty:'Здесь появятся раскрытые характеристики, голоса и итоги. Скрытые карты соперников не записываются.'});if(!g.voteLog?.length)return '';return `<details class="b2-chronicle"><summary>Как шла партия <span>${g.voteLog.length} / 3 голосования</span></summary><ol>${g.voteLog.map(v=>`<li><b>Раунд ${v.round}</b><span>${esc(g.players[v.out]?.name||'Кандидат')} выбыл · ${v.count} ${bunkerVoteWord(v.count)}${v.tied?.length>1?' · жеребьёвка':''}</span>${bunkerBallots(g,v)}</li>`).join('')}</ol></details>`}
     function bunkerScoreDetails(c,g){const tags=c.tags||[],scenario=tags.includes(g.scenario.focus)?2:0,event=tags.includes(bunkerEvent(g).focus)?3:0;return `<span class="b2-score-detail"><b>+${bunkerCardValue(c,g)} к пользе</b><span>База ${Number(c.score)||0}${scenario?' · сценарий +2':''}${event?' · приоритет +3':''}</span></span>`}
     function bunkerBallots(g,v=g.lastVote){if(!v?.ballots?.length)return '';return `<details class="b2-ballots"><summary>Кто за кого голосовал</summary><ul>${v.ballots.map(b=>`<li><span>${esc(g.players[b.from]?.name||'Кандидат')}${b.from===0?' · ты':''}</span><span aria-hidden="true">→</span><b>${esc(g.players[b.to]?.name||'Кандидат')}</b></li>`).join('')}</ul></details>`}
     function bunkerTraitTags(c,g){const tags=(c.tags||[]).filter(t=>t===g.scenario.focus||t===bunkerEvent(g).focus);return tags.length?`<span class="b2-match">Полезно сейчас · ${tags.map(t=>bunkerTags[t]).join(', ')}</span>`:''}
@@ -468,12 +490,12 @@
     function bunkerView(){
       const g=normalizeBunker(s.game),alive=g.players.filter(p=>p.alive).length,event=bunkerEvent(g),human=g.players[0],finalNext=!human.alive||alive<=3;
       const stage={reveal:'Раскрытие',vote:'Голосование',voteResult:'Итоги раунда',over:'Партия завершена'}[g.phase]||'Бункер';
-      return `<main class="app bunker-v2" data-bunker-phase="${g.phase}"><div class="b2-wrap">${top('Бункер','‹ Комната')}${typeof mainSaveNotice==='function'?mainSaveNotice('bunker'):''}<header class="b2-title"><div><span class="b2-kicker">${g.scenario.code} · ${g.scenario.duration} АВТОНОМИИ</span><h1>Бункер<span>Три места. Одна команда.</span></h1></div><div class="b2-capacity"><b>${alive}<small>/ 6</small></b><span>осталось кандидатов</span></div></header><section class="b2-scenario"><div><span class="b2-kicker">СЦЕНАРИЙ</span><h2>${esc(g.scenario.name)}</h2><p>${esc(g.scenario.text)}</p></div><div class="b2-event"><span class="b2-kicker">ПРИОРИТЕТ РАУНДА ${g.round}</span><h3>${esc(event.title)}</h3><p>${esc(event.text)}</p><span class="b2-priority">+3 за «${bunkerTags[event.focus]}» · +2 за «${bunkerTags[g.scenario.focus]}»</span></div></section><nav class="b2-steps" aria-label="Этапы раунда">${['reveal','vote','voteResult'].map((p,i)=>`<span class="${g.phase===p?'is-current':''}" ${g.phase===p?'aria-current="step"':''}><b>0${i+1}</b>${['Раскрытие','Голосование','Итоги'][i]}</span>`).join('')}</nav><section class="b2-command" role="status" aria-live="polite"><div><small>РАУНД ${g.round} / 3 · ${stage.toUpperCase()}</small><h2>${esc(g.message)}</h2>${['reveal','vote'].includes(g.phase)?`<p class="b2-selection" data-bunker-selection>${esc(bunkerSelectionText(g))}</p>`:''}</div>${g.phase==='reveal'?`<button class="btn primary" data-bunker-reveal ${g.selectedCard===null?'disabled':''}>Раскрыть карту</button>`:g.phase==='vote'?`<button class="btn primary" data-bunker-confirm-vote ${g.selectedVote===null?'disabled':''}>Подтвердить голос</button>`:g.phase==='voteResult'?`<button class="btn primary" data-bunker-continue>${finalNext?'К результату':'Следующий раунд'} →</button>`:''}</section>${g.phase==='voteResult'?`<section class="b2-vote-result" data-bunker-vote-result tabindex="-1"><h3>Открытый подсчёт голосов</h3><div>${g.players.map((p,i)=>`<span class="${g.lastVote?.out===i?'is-eliminated':''}">${esc(p.name)} <b>${g.votes?.[i]||0}</b>${g.lastVote?.out===i?' · выбыл':''}</span>`).join('')}</div><p>${g.lastVote?.tied?.length>1?'Равенство голосов: '+g.lastVote.tied.map(i=>esc(g.players[i].name)).join(', ')+'. У каждого был равный шанс при жеребьёвке.':'Кандидат с наибольшим числом голосов покидает убежище.'}</p>${bunkerBallots(g)}</section>`:''}${g.over?bunkerOutcome(g):''}${bunkerChronicle(g)}${g.phase==='vote'?bunkerCandidates(g)+bunkerDossier(g):bunkerDossier(g)+bunkerCandidates(g)}<footer class="b2-footer"><p>Оценка — условный игровой показатель: базовые очки открытых карт плюс бонусы за текущие потребности. Боты видят только раскрытые характеристики соперников.</p><span>Партия сохраняется на этом устройстве · без ограничения времени</span></footer></div></main>`;
+      return `<main class="app bunker-v2" data-bunker-phase="${g.phase}"><div class="b2-wrap">${top('Бункер','‹ Комната')}${typeof mainSaveNotice==='function'?mainSaveNotice('bunker'):''}<header class="b2-title"><div><span class="b2-kicker">${g.scenario.code} · ${g.scenario.duration} АВТОНОМИИ</span><h1>Бункер<span>Три места. Одна команда.</span></h1></div><div class="b2-capacity"><b>${alive}<small>/ 6</small></b><span>осталось кандидатов</span></div></header><section class="b2-scenario"><div><span class="b2-kicker">СЦЕНАРИЙ</span><h2>${esc(g.scenario.name)}</h2><p>${esc(g.scenario.text)}</p></div><div class="b2-event"><span class="b2-kicker">ПРИОРИТЕТ РАУНДА ${g.round}</span><h3>${esc(event.title)}</h3><p>${esc(event.text)}</p><span class="b2-priority">+3 за «${bunkerTags[event.focus]}» · +2 за «${bunkerTags[g.scenario.focus]}»</span></div></section><nav class="b2-steps" aria-label="Этапы раунда">${['reveal','vote','voteResult'].map((p,i)=>`<span class="${g.phase===p?'is-current':''}" ${g.phase===p?'aria-current="step"':''}><b>0${i+1}</b>${['Раскрытие','Голосование','Итоги'][i]}</span>`).join('')}</nav><section class="b2-command" role="status" aria-live="polite"><div><small>РАУНД ${g.round} / 3 · ${stage.toUpperCase()}</small><h2>${esc(g.message)}</h2>${['reveal','vote'].includes(g.phase)?`<p class="b2-selection" data-bunker-selection>${esc(bunkerSelectionText(g))}</p>`:''}</div>${g.phase==='reveal'?`<button class="btn primary" data-bunker-reveal ${g.selectedCard===null?'disabled':''}>Раскрыть карту</button>`:g.phase==='vote'?`<button class="btn primary" data-bunker-confirm-vote ${g.selectedVote===null?'disabled':''}>Подтвердить голос</button>`:g.phase==='voteResult'?`<button class="btn primary" data-bunker-continue>${finalNext?'К результату':'Следующий раунд'} →</button>`:''}</section>${bunkerLearning(g)}${g.phase==='voteResult'?`<section class="b2-vote-result" data-bunker-vote-result tabindex="-1"><h3>Открытый подсчёт голосов</h3><div>${g.players.map((p,i)=>`<span class="${g.lastVote?.out===i?'is-eliminated':''}">${esc(p.name)} <b>${g.votes?.[i]||0}</b>${g.lastVote?.out===i?' · выбыл':''}</span>`).join('')}</div><p>${g.lastVote?.tied?.length>1?'Равенство голосов: '+g.lastVote.tied.map(i=>esc(g.players[i].name)).join(', ')+'. У каждого был равный шанс при жеребьёвке.':'Кандидат с наибольшим числом голосов покидает убежище.'}</p>${bunkerBallots(g)}</section>`:''}${g.over?bunkerOutcome(g):''}${bunkerChronicle(g)}${g.phase==='vote'?bunkerCandidates(g)+bunkerDossier(g):bunkerDossier(g)+bunkerCandidates(g)}<footer class="b2-footer"><p>Оценка — условный игровой показатель: базовые очки открытых карт плюс бонусы за текущие потребности. Боты видят только раскрытые характеристики соперников.</p><span>Партия сохраняется на этом устройстве · без ограничения времени</span></footer></div></main>`;
     }
     function bindBunker(){
       const g=normalizeBunker(s.game);$$('[data-bunker-card]').forEach(b=>b.onclick=()=>{if(typeof mainWritable==='function'&&!mainWritable())return;if(g.phase!=='reveal'||g.over)return;const i=+b.dataset.bunkerCard;if(g.players[0].cards[i].revealed)return;g.selectedCard=g.selectedCard===i?null:i;$$('[data-bunker-card]').forEach(x=>{const on=+x.dataset.bunkerCard===g.selectedCard;x.classList.toggle('is-selected',on);x.setAttribute('aria-pressed',String(on))});paintBunkerSelection();save()});
       $$('[data-bunker-vote]').forEach(b=>b.onclick=()=>{if(typeof mainWritable==='function'&&!mainWritable())return;const i=+b.dataset.bunkerVote;if(g.phase!=='vote'||g.over||!g.players[i].alive)return;g.selectedVote=g.selectedVote===i?null:i;$$('[data-bunker-vote]').forEach(x=>{const on=+x.dataset.bunkerVote===g.selectedVote;x.textContent=on?'Кандидат выбран':'Голосовать против';x.setAttribute('aria-pressed',String(on));x.closest('[data-candidate]').classList.toggle('is-selected',on)});paintBunkerSelection();save()});
-      const bind=(sel,fn)=>{const x=$(sel);if(x)x.onclick=fn};bind('[data-bunker-reveal]',()=>bunkerHumanReveal(g.selectedCard));bind('[data-bunker-confirm-vote]',()=>bunkerHumanVote(g.selectedVote));bind('[data-bunker-continue]',bunkerContinue);bind('[data-bunker-new]',replayBunker);bind('[data-bunker-save-result]',()=>{settleBunker(g);render()});bind('[data-bunker-settings]',()=>{s.view='room';s.room={...(s.room||{}),mode:'bunker',bots:5,diff:g.diff,stake:100};save();render()});bind('[data-bunker-lobby]',()=>{s.view='lobby';save();render()});
+      const bind=(sel,fn)=>{const x=$(sel);if(x)x.onclick=fn};bind('[data-bunker-tutor]',()=>openMainGuide('bunker'));bind('[data-bunker-reveal]',()=>bunkerHumanReveal(g.selectedCard));bind('[data-bunker-confirm-vote]',()=>bunkerHumanVote(g.selectedVote));bind('[data-bunker-continue]',bunkerContinue);bind('[data-bunker-new]',replayBunker);bind('[data-bunker-save-result]',()=>{settleBunker(g);render()});bind('[data-bunker-settings]',()=>{s.view='room';s.room={...(s.room||{}),mode:'bunker',bots:5,diff:g.diff,stake:100};save();render()});bind('[data-bunker-lobby]',()=>{s.view='lobby';save();render()});
     }
     function canHumanAttack(g){return !g.over&&!g.paused&&g.attacker===0&&(g.phase==='attack'||(g.phase==='resolve'&&!g.resolve?.took))&&g.table.length<(g.roundLimit||6)&&g.players[0].hand.some(c=>canAddAttack(c,g))}
     function replayDurak(){if(typeof mainWritable==='function'&&!mainWritable())return;const g=s.game;if(!g?.over||!Array.isArray(g.deck))return;const r={...(s.room||{}),mode:'durak',bots:g.players.length-1,diff:g.diff,stake:g.stake||0};if(s.balance<r.stake)return toast('Для новой партии нужно '+fmt(r.stake)+' V. Результат сохранён.','bad');s.room=r;startGame(r);if(typeof window!=='undefined')window.scrollTo?.({top:0,behavior:'auto'})}
@@ -491,6 +513,41 @@
       if(g.phase==='defend'&&g.defender===0){const a=g.table[g.table.length-1].a;if(!g.players[0].hand.some(c=>beats(c,a,g)))return ['Нечем побить','Подходящих карт нет. Нажми «Забрать карты».'];return ['Твоя защита',isTrump(a,g)?`На столе козырь ${a.rank}${a.suit}. Его побьёт только старший козырь.`:`Побей ${a.rank}${a.suit} старшей картой той же масти или козырем.`]}
       return [g.players[g.phase==='defend'?g.defender:g.attacker].name+' думает',g.phase==='defend'?'Соперник выбирает ответ. Карты останутся на столе.':'Соперник выбирает карту для атаки.'];
     }
+    function durakCardReason(c,g){
+      if(!c)return 'Выбери карту со светлой обводкой. Ход выполняется только после подтверждения.';
+      const name=c.rank+c.suit;
+      if(g.over)return 'Партия завершена. Можно посмотреть журнал ходов или начать новую.';
+      if(g.paused)return 'Партия на паузе. Нажми «Продолжить игру», чтобы выбирать карты.';
+      if((g.finished||[]).includes(0))return 'Ты уже вышел без карт. Осталось дождаться результата соперников.';
+      if(['attack','resolve'].includes(g.phase)&&g.attacker===0&&!g.resolve?.took){
+        if(!g.table.length)return name+' подходит для первой атаки: на пустой стол можно положить любую карту из своей руки.';
+        if(g.table.length>=(g.roundLimit||6))return 'Лимит этой атаки достигнут. Заверши её кнопкой «Бито».';
+        if(g.table.some(pair=>!pair.d))return 'Сначала защитник должен ответить на последнюю карту.';
+        return canAddAttack(c,g)?name+' можно подкинуть: достоинство '+c.rank+' уже есть среди открытых карт на столе.':name+' пока не подходит: такого достоинства нет на столе. Масть при подкидывании не важна.';
+      }
+      if(g.phase==='defend'&&g.defender===0){const a=g.table.at(-1)?.a;if(!a)return 'Ожидаем карту атакующего.';
+        if(beats(c,a,g))return c.suit===a.suit?name+' бьёт '+a.rank+a.suit+': это старшая карта той же масти.':name+' бьёт '+a.rank+a.suit+': козырь сильнее карты другой масти.';
+        return isTrump(a,g)?name+' не бьёт '+a.rank+a.suit+': нужен более старший козырь.':name+' не бьёт '+a.rank+a.suit+': нужна старшая карта той же масти или козырь.';
+      }
+      return g.phase==='roundEnd'?'Сначала нажми «Следующий раунд»: карты ещё не переданы в руку или отбой.':'Сейчас ход соперника. Твои карты останутся на месте.';
+    }
+    function durakSelectionText(g){const c=g.players[0].hand[g.selected];return c?durakCardReason(c,g)+' Подтверди ход кнопкой.':g.paused?'Партия на паузе — боты ждут.':(g.finished||[]).includes(0)?'Ты вышел. Досмотри партию в своём темпе.':g.players[0].hand.some(c=>legalHumanCard(c,g))?'Светлая обводка — карту можно сыграть. Нажми на неё, чтобы увидеть почему.':'Сейчас нет доступного хода картой. Подсказка над рукой объясняет следующий шаг.'}
+    function durakJournal(g){
+      const card=c=>c.rank+c.suit,entries=(g.journal||[]).map(e=>{const who=g.players[e.actor]?.name||'Игрок';let text='';
+        if(e.kind==='start')text='Карты розданы. Первую атаку начинает '+who+'.';
+        if(e.kind==='attack')text=who+' атакует картой '+card(e.card)+'.';
+        if(e.kind==='defense')text=who+' отбивает '+card(e.against)+' картой '+card(e.card)+'.';
+        if(e.kind==='take')text=who+' забирает карты со стола: '+e.count+'. Следующую атаку этот игрок пропускает.';
+        if(e.kind==='discard')text='Бито. В отбой ушло карт: '+e.count+'.';
+        if(e.kind==='draw')text=who+' добирает из колоды: '+e.count+'. Значения новых карт скрыты.';
+        if(e.kind==='out')text=who+' выходит из партии без карт.';
+        if(e.kind==='next')text='Следующую атаку начинает '+who+'.';
+        if(e.kind==='end')text=e.actor===null?'Ничья: ни у кого не осталось карт.':who+' остаётся с картами. Партия завершена.';
+        return {label:'Раунд '+e.round,text};});
+      if(typeof window!=='undefined'&&window.VEZDEHOT_GUIDE?.journal)return window.VEZDEHOT_GUIDE.journal({id:'durak-moves-'+g.id,title:'Журнал ходов',entries:entries.slice().reverse(),empty:'Записываем только реальные действия с момента обновления. Ранее сыгранные ходы не восстанавливаем.'});
+      return `<details class="dt-journal" data-key="durak-journal"><summary>Журнал ходов · ${entries.length}</summary><ol>${entries.map(e=>`<li><b>${esc(e.label)}</b><span>${esc(e.text)}</span></li>`).join('')}</ol></details>`;
+    }
+    function durakTip(g){const text=g.phase==='defend'&&g.defender===0?'Для защиты нужна старшая карта той же масти или козырь. Против козыря помогает только старший козырь. Можно забрать карты, даже если в руке есть ответ.':'Подкидывает только атакующий. Подходит достоинство любой открытой карты на столе — и атаки, и защиты. За раунд максимум шесть пар и не больше карт, чем было у защитника в начале.';return typeof window!=='undefined'&&window.VEZDEHOT_GUIDE?.tip?window.VEZDEHOT_GUIDE.tip({title:'Правило этого хода',text}):''}
     function durakOpponents(g){return g.players.slice(1).map((p,j)=>{const i=j+1,out=(g.finished||[]).includes(i),active=!g.over&&!g.paused&&((g.phase==='attack'&&g.attacker===i)||(g.phase==='defend'&&g.defender===i));return `<div class="dt-player ${active?'is-active':''} ${out?'is-out':''}" data-key="player-${i}" data-seat="${i}" aria-current="${active}"><div class="dt-avatar">${p.face}</div><div class="dt-player-copy"><b>${esc(p.name)}</b><span>${out?'Вышел ✓':i===g.defender?'Защищается':i===g.attacker?'Атакует':'Наблюдает'}</span></div><div class="dt-backs" aria-label="${p.hand.length} карт">${Array.from({length:Math.min(5,p.hand.length)},(_,k)=>`<i style="--n:${k}" aria-hidden="true">V</i>`).join('')}<strong>${p.hand.length}</strong></div></div>`}).join('')}
     function durakBattle(g){return Array.from({length:6},(_,i)=>{const pair=g.table[i];return `<div class="dt-pair ${pair?'has-cards':''}" data-key="pair-${i}"><span class="dt-slot-number" aria-hidden="true">${i+1}</span>${pair?`<div class="dt-card dt-attack ${pair.a.color}" data-key="attack-${pair.a.id}" data-card-id="${pair.a.id}" aria-label="Атака: ${pair.a.rank} ${pair.a.suit}">${cardFace(pair.a)}</div>${pair.d?`<div class="dt-card dt-defense ${pair.d.color}" data-key="defense-${pair.d.id}" data-card-id="${pair.d.id}" aria-label="Защита: ${pair.d.rank} ${pair.d.suit}">${cardFace(pair.d)}</div>`:`<div class="dt-await" aria-label="${g.resolve?.took?'Карты забирают':'Нужна защита'}">${g.resolve?.took?'↙':'···'}</div>`}<small class="dt-pair-label">${pair.d?'Отбито':g.resolve?.took?'Берёт':'Атака'}</small>`:''}</div>`}).join('')}
     function durakHand(g){return g.players[0].hand.map((c,i)=>{const legal=legalHumanCard(c,g);return `<button class="dt-card dt-hand-card ${c.color} ${legal?'is-legal':'is-locked'} ${g.selected===i?'is-selected':''}" data-key="hand-${c.id}" data-card-id="${c.id}" data-card="${i}" data-legal="${legal?'1':'0'}" aria-pressed="${g.selected===i}" aria-label="${c.rank} ${c.suit}${isTrump(c,g)?', козырь':''}. ${legal?'Можно сыграть':'Сейчас нельзя сыграть'}" ${legal?'':'disabled'}>${cardFace(c)}${isTrump(c,g)?'<span class="dt-trump-mark" title="Козырь" aria-hidden="true">◆</span>':''}</button>`}).join('')}
@@ -512,14 +569,15 @@
       <div class="dt-battle-wrap"><div class="dt-watermark" aria-hidden="true">VEZDEHOT <span>PLAY AT YOUR PACE</span></div><div class="dt-battle" aria-label="Карты на столе: атака слева, защита сверху справа">${durakBattle(g)}</div>${!g.table.length?`<div class="dt-empty">${g.over?'Партия завершена':g.attacker===0?'Твоя атака':'Ожидаем атаку'}<small>Атака слева · защита сверху</small></div>`:''}</div>
       <div class="dt-round-note"><span>${g.table.length?`${g.table.length} из ${g.roundLimit||6} пар`:'Стол свободен'}</span><span>Подкидывает только атакующий</span></div></div>
       <section class="dt-control ${active?'your-turn':''}"><div class="dt-status" role="status" aria-live="polite"><span class="dt-status-icon">${g.paused?'Ⅱ':g.over?'✓':active?'↗':g.phase==='resolve'||g.phase==='roundEnd'?'Ⅱ':'·'}</span><div><h1>${esc(info[0])}</h1><p>${esc(info[1])}</p></div></div>
-      ${g.over?durakOutcome(g):''}<div class="dt-hand-head"><b>${esc(human.name)} <span>· ${done?'вышел из игры':human.hand.length+' карт'}</span></b><span>${human.hand.length>6?'Листай руку ↔':'Твоя рука'}</span></div><div class="dt-hand" data-key="hand" aria-label="Твои карты">${durakHand(g)}</div><div class="dt-selected" data-selection-note role="status" aria-live="polite">${g.selected!==null&&human.hand[g.selected]?'Выбрано: '+human.hand[g.selected].rank+human.hand[g.selected].suit:active?'Светлая обводка — карту можно сыграть':done?'Ты вышел. Досмотри партию в своём темпе.':'Карты сохраняют свои места между ходами'}</div><div class="dt-actions">${durakActions(g)}</div></section></section>
-      <footer class="dt-footer"><label>Темп ботов <select data-pace aria-label="Темп ботов"><option value="calm" ${pace==='calm'?'selected':''}>Спокойный</option><option value="normal" ${pace==='normal'?'selected':''}>Обычный</option><option value="quick" ${pace==='quick'?'selected':''}>Быстрый</option></select></label><span>Без таймера на твой ход</span></footer></main>`;
+      ${g.over?durakOutcome(g):''}<div class="dt-hand-head"><b>${esc(human.name)} <span>· ${done?'вышел из игры':human.hand.length+' карт'}</span></b><span>${human.hand.length>6?'Листай руку ↔':'Твоя рука'}</span></div><div class="dt-hand" data-key="hand" aria-label="Твои карты">${durakHand(g)}</div><div class="dt-selected" data-selection-note role="status" aria-live="polite">${esc(durakSelectionText(g))}</div><div class="dt-actions">${durakActions(g)}</div></section></section>
+      <section class="dt-learning" aria-label="Разбор партии"><div>${durakJournal(g)}<p class="dt-journal-note">Последние 80 событий. Только открытые карты и совершённые действия.</p></div><div>${durakTip(g)}<button class="dt-learn-button" data-durak-tutor>Правила и 3 коротких задания <span aria-hidden="true">↗</span></button></div></section><footer class="dt-footer"><label>Темп ботов <select data-pace aria-label="Темп ботов"><option value="calm" ${pace==='calm'?'selected':''}>Спокойный</option><option value="normal" ${pace==='normal'?'selected':''}>Обычный</option><option value="quick" ${pace==='quick'?'selected':''}>Быстрый</option></select></label><span>Без таймера на твой ход</span></footer></main>`;
     }
     // Keep card nodes and scroll positions; only animate the card that actually moves.
     function syncDurakNode(oldNode,newNode){
       if(oldNode.nodeType!==newNode.nodeType||oldNode.nodeName!==newNode.nodeName){oldNode.replaceWith(newNode);return}
       if(oldNode.nodeType===3){if(oldNode.nodeValue!==newNode.nodeValue)oldNode.nodeValue=newNode.nodeValue;return}
       if(oldNode.nodeType!==1)return;
+      if(oldNode.nodeName==='DETAILS'&&oldNode.hasAttribute('open'))newNode.setAttribute('open','');
       for(const a of [...oldNode.attributes])if(!newNode.hasAttribute(a.name))oldNode.removeAttribute(a.name);
       for(const a of [...newNode.attributes])if(oldNode.getAttribute(a.name)!==a.value)oldNode.setAttribute(a.name,a.value);
       const keyed=new Map([...oldNode.children].filter(e=>e.dataset.key).map(e=>[e.dataset.key,e]));
@@ -536,17 +594,51 @@
       if(old&&old.dataset.key===next.dataset.key)syncDurakNode(old,next);else app.replaceChildren(next);
       if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches&&document.documentElement.dataset.motion!=='reduced'){app.querySelectorAll('[data-card-id]').forEach(e=>{const before=positions.get(e.dataset.cardId),after=e.getBoundingClientRect();if(before){const x=before.left-after.left,y=before.top-after.top;if(Math.abs(x)>2||Math.abs(y)>2)e.animate([{translate:`${x}px ${y}px`},{translate:'0 0'}],{duration:340,easing:'cubic-bezier(.2,.7,.2,1)'});}else if(!old||e.classList.contains('dt-defense')||e.classList.contains('dt-attack'))e.animate([{opacity:0,translate:'0 -12px'},{opacity:1,translate:'0 0'}],{duration:300,easing:'ease-out'});});}
     }
-    function paintDurakSelection(){const g=s.game;$$('[data-card]').forEach(b=>{const selected=+b.dataset.card===g.selected;b.classList.toggle('is-selected',selected);b.setAttribute('aria-pressed',String(selected))});const action=$('[data-attack]')||$('[data-defend]');if(action)action.disabled=g.selected===null;const note=$('[data-selection-note]'),c=g.players[0].hand[g.selected];if(note)note.textContent=c?`Выбрано: ${c.rank}${c.suit} · подтверди ход кнопкой`:'Выбери подходящую карту';}
+    function paintDurakSelection(){const g=s.game;$$('[data-card]').forEach(b=>{const selected=+b.dataset.card===g.selected;b.classList.toggle('is-selected',selected);b.setAttribute('aria-pressed',String(selected))});const action=$('[data-attack]')||$('[data-defend]');if(action)action.disabled=g.selected===null;const note=$('[data-selection-note]'),c=g.players[0].hand[g.selected];if(note)note.textContent=durakSelectionText(g);}
     function bindGame(){
       $$('[data-card]').forEach(b=>b.onclick=()=>{if(!mainWritable())return;const g=s.game,i=+b.dataset.card;if(!g||!legalHumanCard(g.players[0].hand[i],g))return;g.selected=g.selected===i?null:i;paintDurakSelection();save()});
       const bind=(sel,fn)=>{const el=$(sel);if(el)el.onclick=fn};
       bind('[data-attack]',playAttack);bind('[data-defend]',humanDefend);bind('[data-take]',humanTake);bind('[data-finish-attack]',finishAttack);bind('[data-continue]',continueRound);
       const pause=()=>{if(!mainWritable())return;clearDurakTimer();s.game.paused=!s.game.paused;s.game.selected=null;save();render();if(!s.game.paused)advance()};bind('[data-pause]',pause);bind('[data-resume]',pause);
       const leave=(view)=>{clearDurakTimer();s.view=view;save();render()};bind('[data-game-back]',()=>leave('room'));const brand=$('[data-game-brand]');if(brand)brand.onclick=e=>{e.preventDefault();leave('lobby')};bind('[data-new]',replayDurak);bind('[data-save-result]',()=>settle(s.game));bind('[data-game-settings]',()=>leave('room'));bind('[data-lobby]',()=>leave('lobby'));
-      bind('[data-durak-help]',durakHelp);const pace=$('[data-pace]');if(pace)pace.onchange=()=>{s.durakPace=pace.value;save();clearDurakTimer();advance()};
+      bind('[data-durak-help]',durakHelp);bind('[data-durak-tutor]',durakHelp);const pace=$('[data-pace]');if(pace)pace.onchange=()=>{s.durakPace=pace.value;save();clearDurakTimer();advance()};
     }
-    function durakHelp(){const m=document.createElement('div');m.className='modal-bg';m.innerHTML=`<div class="modal" role="dialog" aria-modal="true" aria-label="Правила Дурака"><button class="close" data-close aria-label="Закрыть">×</button><div class="eyebrow">ДУРАК · СПОКОЙНЫЙ СТОЛ</div><h2>Каждый ход — в твоём темпе</h2><p>Выбери карту, затем подтверди действие. Старшая карта той же масти бьёт младшую. Козырь бьёт любую некозырную карту.</p><p>В этой версии подкидывает только атакующий: достоинство должно совпадать с любой картой на столе. За раунд — до шести пар и не больше, чем было карт у защитника. После объявления взятия новые карты не подкидываются.</p><p>После отбивки можно подкинуть или нажать «Бито». Если защитник забрал, следующий ход у игрока после него. Без колоды игроки выходят по очереди; оставшийся с картами проигрывает.</p><p>Карты не исчезнут без твоего нажатия. Темп ботов меняется под столом, а кнопка Ⅱ останавливает игру.</p><button class="btn primary" data-close>Понятно</button></div>`;document.body.appendChild(m);clearDurakTimer();const close=()=>{m.remove();advance()};$$('[data-close]',m).forEach(b=>b.onclick=close);m.onkeydown=e=>{if(e.key==='Escape')close()};$('[data-close]',m).focus()}
-    function helpModal(){const m=document.createElement('div');m.className='modal-bg';m.innerHTML=`<div class="modal"><button class="close" data-close>×</button><div class="eyebrow">VEZDEHOT · БЫСТРАЯ СПРАВКА</div><h2>Как начать игру</h2><p>Выбери активную игру в лобби, настрой ботов и нажми «Начать». В «Бункере» сначала открывается одна зелёная карта, затем выбирается игрок на выбывание.</p><div class="hint-line"><span>🟢</span><span><b>Зелёная карта</b> — действие доступно сейчас.</span></div><div class="hint-line"><span>🗳️</span><span><b>Голосование</b> — нажми на игрока, которого не берёшь.</span></div><div class="hint-line"><span>💾</span><span><b>Сохранение</b> — баланс и прогресс хранятся автоматически.</span></div><div class="room-actions" style="margin-top:15px"><button class="btn primary" data-close>Понятно</button></div></div>`;document.body.appendChild(m);$$('[data-close]',m).forEach(b=>b.onclick=()=>m.remove())}
+    // MAIN_GUIDES_START — short practice uses examples, never another player's hidden state.
+    function mainGuideContent(mode,g){
+      if(mode==='bunker')return {game:'bunker',title:'Бункер: понять свой выбор',context:bunkerGoal(g),sections:[
+        {title:'Одна карта за раунд',text:'Свои шесть характеристик видишь заранее. Выбери одну закрытую карту и подтверди раскрытие. Затем по одной карте открывают живые боты. Раскрытие нельзя отменить.'},
+        {title:'Как оценивать кандидатов',text:'Сравни только открытые характеристики. Польза карты: базовые очки, +2 при совпадении с потребностью сценария и +3 при совпадении с приоритетом раунда. Приоритет меняется каждый раунд. Баллы — подсказка о текущих потребностях, а не вероятность победы или раскрытие тайных карт.'},
+        {title:'Выбор и подтверждение',text:'Нажми на кандидата, которого предлагаешь исключить, затем на «Подтвердить голос». За себя и выбывших голосовать нельзя. После отправки виден каждый реальный голос.'},
+        {title:'Кто выходит и кто выигрывает',text:'Выбывает участник с наибольшим числом голосов. При равенстве игра случайно выбирает одного из лидеров, с одинаковыми шансами для каждого. Цель — остаться среди трёх кандидатов. Ход следующего раунда начинается только по твоей кнопке.'}
+      ],lessons:[
+        {id:'bunker-reveal',title:'Раскрытие',prompt:'Ты выбрал закрытую карточку профессии. Что произойдёт сейчас?',choices:[{label:'Карта откроется после кнопки «Раскрыть карту»',correct:true,feedback:'Верно. Выбор можно поменять до подтверждения. Остальные карты остаются закрыты.'},{label:'Сразу откроются все шесть характеристик',correct:false,feedback:'За раунд раскрывается только одна выбранная карта, после подтверждения.'},{label:'Карта уже стала видна соперникам',correct:false,feedback:'Первое нажатие только выбирает карту. Раскрытие выполняет отдельная кнопка.'}]},
+        {id:'bunker-vote',title:'Голосование',prompt:'Ты нажал на карточку кандидата. Голос уже отправлен?',choices:[{label:'Нет, нужно нажать «Подтвердить голос»',correct:true,feedback:'Да. До подтверждения можно выбрать другого живого кандидата.'},{label:'Да, кандидат сразу выбывает',correct:false,feedback:'Сначала подтверди голос кнопкой, затем игра посчитает все голоса. Один твой голос не определяет итог автоматически.'}]},
+        {id:'bunker-score',title:'Открытая польза',prompt:'У кандидата больше открытых баллов. Что это означает?',choices:[{label:'Открытые карты полезнее по текущим критериям',correct:true,feedback:'Верно. Это сумма по известным картам. Скрытые свойства не учитываются, решение голосования не гарантировано.'},{label:'Его скрытые карты тоже обязательно сильнее',correct:false,feedback:'Скрытые карты неизвестны. По открытой пользе нельзя узнать их содержание.'},{label:'Он обязательно выиграет голосование',correct:false,feedback:'Баллы помогают сравнивать. Боты могут голосовать иначе, а при равенстве голосов есть жеребьёвка.'}]}
+      ]};
+      const c=g?.players?.[0]?.hand?.[g.selected],status=g?durakStatus(g):null;
+      return {game:'durak',title:'Дурак: понимать каждый ход',context:g?{title:c?'Почему подходит карта '+c.rank+c.suit:status[0],text:c?durakCardReason(c,g):status[1]}:{title:'Подготовь стол',text:'Выбери число ботов, сложность и ставку. Первый ход — у младшего козыря; если козырей нет ни у кого, начинает случайный игрок.'},sections:[
+        {title:'Атака и защита',text:'На пустой стол атакующий кладёт любую свою карту. Защитник отвечает старшей картой той же масти или козырем. Козырь бьётся только старшим козырем. Нажатие на карту показывает причину, ход подтверждается отдельной кнопкой.'},
+        {title:'Как подкинуть',text:'В этой версии подкидывает только атакующий. Достоинство должно совпасть с любой открытой картой на столе — атаки или защиты. Масть не важна. За раунд максимум шесть пар и не больше, чем было карт у защитника в начале.'},
+        {title:'Бито или взять',text:'После успешной защиты атакующий может подкинуть или закончить атаку кнопкой «Бито». Защитник может забрать карты. После объявления взятия подкидываний нет. Карты переходят в руку или отбой после кнопки «Следующий раунд».'},
+        {title:'Новый раунд и победа',text:'Атакующий добирает первым, защитник — последним. Отбившийся начинает следующую атаку. Забравший пропускает её. Когда колода пуста, игроки без карт выходят; оставшийся с картами проигрывает. Если карт нет ни у кого — ничья.'},
+        {title:'Твой темп',text:'Можно остановить ботов кнопкой паузы. Открытие этой справки тоже ставит партию на паузу. После закрытия нажми «Продолжить игру», когда будешь готов. Журнал содержит только сыгранные карты и фактические действия.'}
+      ],lessons:[
+        {id:'durak-defense',title:'Защита',prompt:'Козырь — ♥. На столе атака 9♠. Какая карта её побьёт?',choices:[{label:'6♥',correct:true,feedback:'Верно. Любой козырь бьёт некозырную карту, даже если достоинство меньше.'},{label:'8♠',correct:false,feedback:'Масть подходит, но 8 младше 9. Нужна более старшая пика или козырь.'},{label:'A♦',correct:false,feedback:'Туз другой некозырной масти не подходит. Нужна старшая пика или черва.'}]},
+        {id:'durak-add',title:'Подкидывание',prompt:'На столе 7♣, отбитая 10♣. Что может подкинуть атакующий?',choices:[{label:'10♦',correct:true,feedback:'Верно. Достоинство 10 уже есть на столе в защите. Масть при подкидывании не важна.'},{label:'9♣',correct:false,feedback:'Совпадение масти не помогает. Подходят только достоинства 7 или 10.'},{label:'Любой козырь',correct:false,feedback:'Даже козырь можно подкинуть только с достоинством, уже открытым на столе.'}]},
+        {id:'durak-take',title:'Следующий раунд',prompt:'Защитник забрал карты. Кто начинает следующую атаку?',choices:[{label:'Следующий активный игрок после защитника',correct:true,feedback:'Верно. Забравший пропускает атаку. Игроки, уже вышедшие без карт, тоже пропускаются.'},{label:'Тот, кто забрал карты',correct:false,feedback:'Забравший пропускает следующую атаку. Начинает следующий активный игрок после него.'}]}
+      ]};
+    }
+    function openMainGuide(mode){
+      if(typeof mainWritable==='function'&&!mainWritable())return;
+      if(!window.VEZDEHOT_GUIDE?.open)return;
+      const game=mainGameKind(s.game)===mode?s.game:null,content=mainGuideContent(mode,game);
+      clearDurakTimer();if(mainGameKind(s.game)==='durak'&&!s.game.over)s.game.paused=true;save();render();
+      const trigger=document.querySelector(mode==='durak'?(s.view==='game'?'[data-durak-help]':'[data-help]'):'[data-help]');
+      window.VEZDEHOT_GUIDE.open({...content,trigger});
+    }
+    function durakHelp(){openMainGuide('durak')}
+    function helpModal(){openMainGuide(s.view==='bunker'||s.room?.mode==='bunker'?'bunker':'durak')}
+    // MAIN_GUIDES_END
     function settings(){window.VEZDEHOT.openAccount()}
     s=load();
     document.addEventListener('vezdehot:sessionpause',()=>{clearDurakTimer();if(mainGameKind(s.game)==='durak'&&!s.game.over){s.game.paused=true;s.game.selected=null}save()});

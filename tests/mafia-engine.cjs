@@ -46,6 +46,20 @@ test('a non-owning tab cannot act, charge an entry, save, or settle a result',()
  assert.equal(JSON.stringify(g),snapshot);assert.equal(p.balance,balanceBefore);assert.equal(results,resultsBefore);assert.equal(JSON.stringify([...store]),savesBefore);
  run('g=null');api.start();assert.equal(ctx.g,null);assert.equal(p.balance,balanceBefore);delete ctx.window.VEZDEHOT_TAB_SESSION;
 });
+test('personal marks persist independently of confirmed knowledge and never change bot decisions',()=>{
+ const g=fixture('civilian');const knowledge=JSON.stringify(g.knowledge),suspicion=JSON.stringify(g.publicSuspicion),balanceBefore=p.balance;
+ seed=310;const before=JSON.stringify(api.botVote(g.players));
+ run('markPlayer(1,"suspect");markPlayer(2,"trust");markPlayer(3,"unsure")');
+ seed=310;assert.equal(JSON.stringify(api.botVote(g.players)),before);assert.equal(JSON.stringify(g.knowledge),knowledge);assert.equal(JSON.stringify(g.publicSuspicion),suspicion);assert.equal(p.balance,balanceBefore);
+ run('g=null');api.restore();assert.equal(ctx.g.personalMarks[1],'suspect');assert.equal(ctx.g.personalMarks[2],'trust');assert.equal(ctx.g.personalMarks[3],'unsure');
+ run('markPlayer(1,"");clearPersonalMarks()');assert.deepEqual(Object.keys(ctx.g.personalMarks),[]);
+});
+test('marks reject invalid keys and values, protect saved state, and respect tab ownership',()=>{
+ const g=fixture();run('markPlayer(1,"suspect")');const before=JSON.stringify(g),stored=store.get('vezdehot_mafia_v3_test-user');
+ run('markPlayer(0,"trust");markPlayer(7,"trust");markPlayer(1,"mafia");markPlayer(1.5,"trust")');assert.equal(JSON.stringify(g),before);
+ ctx.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};run('markPlayer(1,"trust");clearPersonalMarks()');assert.equal(JSON.stringify(g),before);delete ctx.window.VEZDEHOT_TAB_SESSION;
+ for(const invalid of [{0:'trust'},{7:'suspect'},{1:'mafia'},['trust'],{'01':'trust'}]){g.personalMarks=invalid;assert.equal(api.saveState(),false);assert.equal(store.get('vezdehot_mafia_v3_test-user'),stored)}
+});
 test('120 seeded games complete with legal players, team results and no timers',()=>{p.balance=50000;for(let n=0;n<120;n++){run('g=null;paused=false');api.start();let actions=0;while(!ctx.g.over&&actions++<200){const g=ctx.g;if(g.phase==='night'){const me=g.players[0];if(me.alive&&me.role!=='civilian'){const target=g.players.find(x=>api.targetable(x,me.role,me));if(target)api.chooseNight(target.id)}api.confirmNight()}else if(g.phase==='dawn')api.beginDay();else if(g.phase==='day')api.beginVote();else if(g.phase==='vote'){if(g.players[0].alive){const target=g.players.find(x=>api.targetable(x,'vote',g.players[0]));api.chooseVote(target.id)}api.castVote()}else if(g.phase==='voteResult')api.continueAfterVote();else throw Error(g.phase)}assert(ctx.g.over);assert(['town','mafia','draw'].includes(ctx.g.winningTeam));assert.equal(ctx.g.players.length,7);assert.equal(new Set(ctx.g.revealed).size,ctx.g.revealed.length)}});
 assert(!source.includes('setTimeout'),'all progression must be explicit');
 console.log(`${tests} Mafia checks passed`);

@@ -41,6 +41,8 @@ test('the shipped page loads storage and tab coordination before the platform', 
   assert.ok(html.indexOf('src="./game-store.js"') < html.indexOf('src="./platform.js"'));
   assert.ok(html.indexOf('src="./tab-session.js"') < html.indexOf('src="./platform.js"'));
   assert.ok(html.indexOf('href="./session.css"') > html.indexOf('href="./platform.css"'));
+  assert.ok(html.indexOf('src="./game-guide.js"') < html.indexOf('src="./platform.js"'));
+  assert.ok(html.indexOf('href="./game-guide.css"') > html.indexOf('href="./session.css"'));
 });
 test('legacy migration restores exact phase, selected vote and journal without charging another entry', () => {
   const first = harness(), g = first.fixture();
@@ -116,5 +118,16 @@ test('explicit reset writes a tombstone so a retained legacy game cannot reappea
   const h = harness(), g = h.fixture(); h.data.set(legacy, JSON.stringify(g)); h.run('endGame("town","Город победил.");reset()');
   assert.equal(h.context.g, null); assert.equal(JSON.parse(h.data.get(primary)).payload, null);
   const next = harness(h.data); next.run('restore()'); assert.equal(next.context.g, null);
+});
+test('personal assumptions migrate from an older game, survive reload and reject malformed recovery', () => {
+  const first = harness(), g = first.fixture(); delete g.personalMarks; first.data.set(legacy, JSON.stringify(g));
+  const h = harness(first.data, first.profile); h.run('restore();markPlayer(2,"trust");markPlayer(3,"suspect")');
+  assert.equal(h.context.g.id, g.id); assert.equal(h.profile.balance, 10000);
+  const reloaded = harness(h.data, h.profile); reloaded.run('restore()');
+  assert.equal(reloaded.context.g.personalMarks[2], 'trust'); assert.equal(reloaded.context.g.personalMarks[3], 'suspect');
+  const corrupted = JSON.parse(h.data.get(primary)); corrupted.payload.personalMarks[3] = 'confirmed-mafia'; h.data.set(primary, JSON.stringify(corrupted));
+  const recovered = harness(h.data, h.profile); recovered.run('restore()');
+  assert.equal(recovered.store.status('mafia', 'test-user').status, 'recovered'); assert.equal(recovered.context.g.personalMarks[2], 'trust');
+  assert.equal(recovered.context.g.personalMarks[3], undefined); assert.deepEqual(Object.keys(recovered.context.g.knowledge), []);
 });
 console.log(`${count} Mafia storage integration checks passed`);

@@ -201,6 +201,80 @@ test('stale UI click handlers cannot advance a game after tab ownership is lost'
   delete context.window.VEZDEHOT_TAB_SESSION;
 });
 
+test('learning opens on a saved pause and does not change the phase, target, role or economy', () => {
+  const g = fixture(), guide = {}, trigger = {}, balance = profile.balance;
+  g.nightTarget = 1; const before = JSON.stringify(g);
+  context.window.VEZDEHOT_GUIDE = { open(options) { Object.assign(guide, options); } };
+  selectors.set('[data-rules]', trigger); groups.set('[data-rules]', [trigger]); run('bind()'); trigger.onclick();
+  assert.equal(context.paused, true); assert.equal(JSON.parse(writes.get('vezdehot_mafia_v3_guest')).paused, true);
+  assert.equal(g.phase, 'night'); assert.equal(g.nightTarget, 1); assert.equal(profile.balance, balance);
+  const after = { ...g }; delete after.paused; assert.equal(JSON.stringify(after), before);
+  assert.equal(guide.game, 'mafia'); assert.equal(guide.trigger, trigger); assert.equal(guide.lessons.length, 3);
+  assert.equal(guide.onClose, undefined, 'closing training must not automatically resume the game');
+  delete context.window.VEZDEHOT_GUIDE;
+});
+
+test('all three learning situations are standalone and have one explained correct answer', () => {
+  const g = fixture('civilian'), baseline = run('JSON.stringify(mafiaLessons())'), lessons = JSON.parse(baseline);
+  assert.equal(new Set(lessons.map(lesson => lesson.id)).size, 3);
+  for (const lesson of lessons) { assert.equal(lesson.choices.filter(choice => choice.correct).length, 1); assert.ok(lesson.choices.every(choice => choice.feedback && choice.label)); }
+  assert.match(lessons[0].choices.find(choice => choice.correct).feedback, /предположением/);
+  assert.match(lessons[1].choices.find(choice => choice.correct).feedback, /выбывшим/);
+  assert.match(lessons[2].choices.find(choice => choice.correct).feedback, /Подтверждение/);
+  g.players.forEach(p => { p.role = 'mafia'; }); g.knowledge = { 0: { 1: 'mafia' } }; g.phase = 'vote';
+  assert.equal(run('JSON.stringify(mafiaLessons())'), baseline); run('g=null'); assert.equal(run('JSON.stringify(mafiaLessons())'), baseline);
+});
+
+test('mobile learning returns focus to the invoked visible control instead of the hidden header button', () => {
+  fixture(); const header = {}, footer = {}; let received;
+  context.window.VEZDEHOT_GUIDE = { open(options) { received = options; } };
+  groups.set('[data-rules]', [header, footer]); selectors.set('[data-rules]', header); run('bind()');
+  footer.onclick({ currentTarget: footer }); assert.equal(received.trigger, footer);
+  delete context.window.VEZDEHOT_GUIDE;
+});
+
+test('context and personal notebook never reveal unconfirmed roles or other players private knowledge', () => {
+  const g = fixture('civilian'); g.personalMarks = { 1: 'suspect', 2: 'trust' }; g.phase = 'vote';
+  const contextBefore = run('JSON.stringify(mafiaContext())'), notebookBefore = run('personalNotebook()');
+  [g.players[1].role, g.players[4].role] = [g.players[4].role, g.players[1].role]; g.knowledge[3] = { 1: 'mafia' };
+  assert.equal(run('JSON.stringify(mafiaContext())'), contextBefore); assert.equal(run('personalNotebook()'), notebookBefore);
+  assert.match(notebookBefore, /Боты их не видят/); assert.match(notebookBefore, /не раскрывают роли/);
+  g.players[1].name = '<img src=x onerror=alert(1)>'; assert.ok(!run('personalNotebook()').includes('<img'));
+});
+
+test('common journals preserve round labels, reverse chronology, privacy and disclosure state', () => {
+  const g = fixture(), calls = [];
+  g.log = ['День 3: Решение города.', 'Ночь 3: Жертв нет.', 'Ночь 2: Старое событие.']; g.privateNotes = ['Ночь 3: Луна — мафия.'];
+  context.window.VEZDEHOT_GUIDE = { journal(options) { calls.push(options); return '<details data-detail="' + options.id + '"></details>'; } };
+  run('uiDetails.chronicle=true;logs()');
+  const chronicle = calls.find(call => call.id === 'chronicle'), notebook = calls.find(call => call.id === 'notebook');
+  assert.equal(chronicle.open, true); assert.deepEqual(Array.from(chronicle.entries, entry => entry.label), ['День 03', 'Ночь 03', 'Ночь 02']);
+  assert.equal(chronicle.entries[0].text, 'Решение города.'); assert.equal(notebook.entries[0].text, 'Луна — мафия.');
+  calls.length = 0; g.players[0].role = 'civilian'; run('logs()'); assert.ok(!calls.some(call => call.id === 'notebook'));
+  delete context.window.VEZDEHOT_GUIDE;
+});
+
+test('stale learning and personal-mark controls do nothing after ownership is lost', () => {
+  const g = fixture(), rules = {}, mark = { dataset: { personalMark: '1' }, value: 'suspect' }, clear = {}; let opened = 0;
+  context.window.VEZDEHOT_GUIDE = { open() { opened++; } };
+  groups.set('[data-rules]', [rules]); groups.set('[data-personal-mark]', [mark]); groups.set('[data-clear-marks]', [clear]); run('bind()');
+  context.window.VEZDEHOT_TAB_SESSION = { canWrite: () => false }; const before = JSON.stringify(g);
+  rules.onclick(); mark.onchange(); clear.onclick(); assert.equal(opened, 0); assert.equal(JSON.stringify(g), before); assert.equal(context.paused, false);
+  delete context.window.VEZDEHOT_TAB_SESSION; delete context.window.VEZDEHOT_GUIDE;
+});
+
+test('shipped shared journal renders Mafia round labels and escaped private entries with stable disclosure keys', () => {
+  const g = fixture(); g.log = ['День 3: Решение города.', 'Ночь 3: Все живы.']; g.privateNotes = ['Ночь 3: <img src=x> — мафия.'];
+  context.document.addEventListener = () => {}; context.window.addEventListener = () => {};
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname, '../dist/game-guide.js'), 'utf8'), context);
+  run('uiDetails.chronicle=true'); const output = run('logs()');
+  assert.match(output, /class="vh-journal" data-key="journal-chronicle" data-detail="chronicle" open/);
+  assert.match(output, /Ночь 03/); assert.match(output, /День 03/); assert.match(output, /2 события · новые сверху/);
+  assert.match(output, /journal-notebook/); assert.match(output, /&lt;img src=x&gt;/); assert.ok(!output.includes('<img'));
+  assert.match(run('mafiaTip()'), /class="vh-coach"/);
+  delete context.window.VEZDEHOT_GUIDE;
+});
+
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.
 new Function(html.match(/<script>\s*([\s\S]*?)<\/script>/)[1]);
 console.log(`${count} Mafia UI checks passed`);

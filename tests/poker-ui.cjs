@@ -6,16 +6,16 @@ const inline = html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
 const PROFILE = 'poker-test-profile', SESSION = 'vezdehot_poker_v2_guest';
 const plain = value => JSON.parse(JSON.stringify(value));
 
-async function harness({ store = new Map(), failRecord = false, scope = 'guest', sharedStore = true, failStorage = false, owner = true } = {}) {
+async function harness({ store = new Map(), failRecord = false, scope = 'guest', sharedStore = true, failStorage = false, owner = true, guide = true } = {}) {
   const events = new Map(), groups = new Map(), timers = new Map();
-  let nextTimer = 0, seed = 88091, renderCount = 0, recordCalls = 0, profileOpens = 0;
+  let nextTimer = 0, seed = 88091, renderCount = 0, recordCalls = 0, profileOpens = 0, guideConfig = null, guideOpens = 0;
   const initial = { nick: 'Игрок', balance: 10000, games: 0, wins: 0, xp: 0, resultIds: [], history: [] };
   let profile = JSON.parse(store.get(PROFILE) || JSON.stringify(initial));
   const persistProfile = () => store.set(PROFILE, JSON.stringify(profile));
   const rules = { open: false, addEventListener() {}, showModal() { this.open = true; }, close() { this.open = false; } };
   const app = { style: {}, inert: false }, closeRules = {};
   const selectors = new Map([['#app', app], ['#rules', rules], ['#close-rules', closeRules]]);
-  for (const selector of ['[data-start]', '[data-new]', '[data-next]', '[data-cashout]', '[data-settings]', '[data-account]', '[data-resolve]']) groups.set(selector, [{}]);
+  for (const selector of ['[data-start]', '[data-new]', '[data-next]', '[data-cashout]', '[data-settings]', '[data-account]', '[data-resolve]', '[data-rules]', '[data-pause]']) groups.set(selector, [{}]);
   const platform = {
     ready: Promise.resolve(), scopeKey: () => scope,
     getProfile: () => plain(profile),
@@ -55,17 +55,21 @@ render = function () { document.rendered = saveNotice() + (g ? controls() : intr
 window.__poker = { get g() { return g; }, get error() { return error; }, get accountChanging() { return accountChanging; },
   startHand, nextHand, closeTable, syncResult, commitUI, saveHand, saveNotice, controls, notice, bind, boot, takeAction, continueHand, togglePause, canPlay,
   pokerNewGame, pokerAction, pokerFinish, pokerContinue, legalActions, tableFinished,
-  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, setRaise(value) { selectedRaise=value; } };
+  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
   vm.createContext(context);
+  if (guide) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../dist/game-guide.js'), 'utf8'), context, { filename: 'game-guide.js' });
+    context.window.VEZDEHOT_GUIDE = { ...context.window.VEZDEHOT_GUIDE, open(config) { guideConfig=config;guideOpens++; } };
+  }
   if (sharedStore) vm.runInContext(fs.readFileSync(path.join(__dirname, '../dist/game-store.js'), 'utf8'), context, { filename: 'game-store.js' });
   vm.runInContext(inline.replace('\nboot();\n', '\n' + exposure + '\n'), context, { filename: 'poker.html' });
   await Promise.resolve(); await Promise.resolve();
   return {
     api: context.window.__poker, context, store, timers, app, groups,
     profile: () => plain(profile), output: () => document.rendered, recordCalls: () => recordCalls,
-    renderCount: () => renderCount, profileOpens: () => profileOpens,
+    renderCount: () => renderCount, profileOpens: () => profileOpens, guideConfig: () => guideConfig, guideOpens: () => guideOpens, rules, closeGuide() { guideConfig?.onClose?.(); },
     setFailRecord(value) { failRecord = value; },
     setFailStorage(value) { failStorage = value; },
     setOwner(value) { owner = value; },
@@ -297,6 +301,48 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     const snapshot=JSON.stringify(h.api.g),entries=JSON.stringify([...h.store]);h.setOwner(false);for(const callback of queued)callback();
     h.api.saveHand();h.api.startHand();h.api.syncResult();assert.equal(JSON.stringify(h.api.g),snapshot);assert.equal(JSON.stringify([...h.store]),entries);
     assert.equal(h.profile().balance,9900);assert.equal(h.recordCalls(),0);
+  });
+  await test('opening lessons pauses and saves the current hand without changing cards, chips or wallet', async () => {
+    const h=await harness();h.click('[data-start]');const before=plain(h.api.g),wallet=h.profile(),queued=[...h.timers.values()];
+    h.click('[data-rules]');assert.equal(h.guideOpens(),1);assert.equal(h.guideConfig().game,'poker');assert.equal(h.guideConfig().lessons.length,3);
+    assert.equal(h.api.g.paused,true);assert.equal(h.saves.peek('poker','guest').state.paused,true);assert.equal(h.timers.size,0);
+    assert.deepEqual({...plain(h.api.g),paused:before.paused},before);assert.deepEqual(h.profile(),wallet);assert.equal(h.recordCalls(),0);
+    for(const callback of queued)callback();h.closeGuide();assert.equal(h.api.g.paused,true);assert.equal(h.timers.size,0);assert.match(h.output(),/Продолжить игру/);
+    h.click('[data-pause]');assert.equal(h.api.g.paused,false);assert.ok(h.timers.size>0);
+  });
+  await test('intro and completed-hand lessons never start a hand or settle the table', async () => {
+    const h=await harness();h.click('[data-rules]');assert.equal(h.api.g,null);assert.equal(h.profile().balance,10000);assert.equal(h.guideOpens(),1);
+    h.click('[data-start]');const ended=finishWithHumanWinner(h),snapshot=plain(ended),wallet=h.profile();h.click('[data-rules]');
+    assert.deepEqual(plain(h.api.g),snapshot);assert.deepEqual(h.profile(),wallet);assert.equal(h.recordCalls(),0);
+    h.setOwner(false);h.api.openPokerGuide();assert.equal(h.guideOpens(),2);
+  });
+  await test('fallback rules also remain paused until the player explicitly continues', async () => {
+    const h=await harness({guide:false});h.click('[data-start]');h.click('[data-rules]');assert.equal(h.rules.open,true);assert.equal(h.api.g.paused,true);
+    h.rules.close();assert.equal(h.api.g.paused,true);assert.equal(h.timers.size,0);assert.match(h.output(),/Продолжить игру/);
+  });
+  await test('context explains committed chips and remains unchanged when only hidden bot cards change', async () => {
+    const h=await harness();h.click('[data-start]');const g=h.api.g;g.toAct=0;g.currentBet=100;g.minRaise=40;Object.assign(g.players[0],{roundBet:20,totalBet:20,chips:980,actedAtBet:null});h.api.setRaise(340);
+    const hint=plain(h.api.pokerContext());assert.match(hint.text,/колл добавит 80/);assert.match(hint.text,/Рейз до 340.*добавит 320/);
+    g.toAct=1;const waiting=plain(h.api.pokerContext());g.players.slice(1).forEach(player=>player.hand=[{id:'unknown-hidden-card'}]);assert.deepEqual(plain(h.api.pokerContext()),waiting);g.toAct=0;assert.deepEqual(plain(h.api.pokerContext()),hint);
+    g.paused=true;h.api.view();assert.deepEqual(plain(h.api.pokerContext()),hint,'pausing the real view preserves the chosen raise and its visible action math');
+    g.players[0].chips=30;assert.match(h.api.pokerContext().text,/колл добавит 30/);assert.match(h.api.pokerContext().text,/короткий ва-банк/);assert.ok(!h.api.pokerContext().text.includes('Рейз до'));
+  });
+  await test('mini-lesson solutions agree with the shipped call, best-five and side-pot engines', async () => {
+    const h=await harness(),lessons=h.api.pokerLessons();assert.equal(new Set(lessons.map(x=>x.id)).size,3);assert.ok(lessons.every(x=>x.choices.filter(choice=>choice.correct).length===1&&x.choices.every(choice=>choice.feedback)));
+    const call=h.api.pokerNewGame('Ты','normal',1);call.currentBet=100;call.minRaise=40;Object.assign(call.players[0],{roundBet:20,totalBet:20,chips:980,actedAtBet:null});
+    const raise=plain(call);assert.equal(h.api.legalActions(call,0).callAmount,80);assert.equal(h.api.pokerAction(call,0,'call'),true);assert.equal(call.players[0].chips,900);
+    assert.equal(h.api.pokerAction(raise,0,'raise',340),true);assert.equal(raise.players[0].chips,660);
+    const cards=text=>text.split(' ').map(id=>({id,rank:id.slice(0,-1),suit:id.slice(-1),v:['2','3','4','5','6','7','8','9','10','J','Q','K','A'].indexOf(id.slice(0,-1))+2}));
+    const board=cards('A♠ K♠ Q♠ J♠ 10♠');assert.equal(h.api.evaluate(board.concat(cards('A♥ A♦'))).value,h.api.evaluate(board.concat(cards('2♥ 3♥'))).value);
+    const pots=h.api.pokerNewGame('Ты','normal');pots.community=cards('2♣ 3♦ 7♣ 8♦ 10♣');['A♠ A♥','K♠ K♥','Q♠ Q♥','J♠ J♥'].forEach((hand,i)=>Object.assign(pots.players[i],{hand:cards(hand),totalBet:[100,300,300,0][i],folded:i===3}));
+    const split=h.api.splitPots(pots);assert.deepEqual(plain(split.pots.map(pot=>pot.amount)),[300,400]);assert.deepEqual(plain(split.prizes),[300,400,0,0]);assert.ok(!split.pots[1].winners.includes(0));
+    assert.match(lessons[0].choices.find(x=>x.correct).label,/80.*320/);assert.match(lessons[1].choices.find(x=>x.correct).label,/разделится/);assert.match(lessons[2].choices.find(x=>x.correct).label,/300.*400/);
+  });
+  await test('journals expose every retained event, keep newest first and include the just-finished hand', async () => {
+    const h=await harness();h.click('[data-start]');const g=h.api.g;g.history=Array.from({length:30},(_,i)=>'Событие '+(30-i));
+    const logs=h.api.pokerJournals();assert.deepEqual([...logs.matchAll(/Событие (\d+)</g)].map(match=>Number(match[1])),Array.from({length:30},(_,i)=>30-i));assert.match(logs,/30 событий/);assert.match(logs,/data-key="journal-poker-hand-history"/);
+    g.history=['<img src=x onerror=alert(1)>'];const single=h.api.pokerJournals();assert.match(single,/1 событие/);assert.ok(!single.includes('<img'));assert.match(single,/&lt;img/);
+    finishWithHumanWinner(h);assert.match(h.api.pokerJournals(),/Раздача №1/);h.api.nextHand();const next=h.api.pokerJournals();assert.equal((next.match(/Раздача №1/g)||[]).length,1);
   });
   new Function(inline);
   console.log(`${count} poker lifecycle UI checks passed`);
