@@ -99,12 +99,12 @@ test('disclosure state survives manual phases and mobile phase navigation honors
 test('untrusted player names are escaped in dossier attributes and result messages', () => {
   const g = fixture(); g.players[1].name = '<img src=x onerror="alert(1)">';
   assert.ok(!run('playerGrid()').includes('<img'));
-  g.over = true; g.resultReason = '<script>alert(1)</script>'; g.win = false;
+  g.over = true; g.settled = true; g.resultReason = '<script>alert(1)</script>'; g.win = false;
   assert.ok(!run('resultPanel()').includes('<script>'));
 });
 
 test('replay opens a new first night with the same difficulty and charges the entry once', () => {
-  const old = fixture('civilian'); old.over = true; old.phase = 'result'; old.diff = 'hard';
+  const old = fixture('civilian'); old.over = true; old.settled = true; old.phase = 'result'; old.diff = 'hard';
   const replay = {}; groups.set('[data-replay]', [replay]); run('bind()');
   replay.onclick();
   assert.notEqual(context.g.id, old.id); assert.equal(context.g.phase, 'night');
@@ -115,14 +115,14 @@ test('replay opens a new first night with the same difficulty and charges the en
   assert.equal(JSON.parse(writes.get('vezdehot_mafia_v3_guest')).id, newId);
 });
 test('insufficient replay balance preserves the completed game and shows an actionable error', () => {
-  const old = fixture(); old.over = true; old.phase = 'result'; old.winningTeam = 'town'; old.win = true; old.resultReason = 'Город победил.';
+  const old = fixture(); old.over = true; old.settled = true; old.phase = 'result'; old.winningTeam = 'town'; old.win = true; old.resultReason = 'Город победил.';
   profile.balance = 50; run('replay()');
   assert.equal(context.g.id, old.id); assert.equal(profile.balance, 50);
   assert.match(app.innerHTML, /role="alert"/); assert.match(app.innerHTML, /Для входа нужно 100 V/);
   assert.match(app.innerHTML, /Результат партии/);
 });
 test('result explains team victory, eliminated-player credit and net entry accounting', () => {
-  const g = fixture('civilian'); g.over = true; g.phase = 'result'; g.winningTeam = 'town'; g.win = true;
+  const g = fixture('civilian'); g.over = true; g.settled = true; g.phase = 'result'; g.winningTeam = 'town'; g.win = true;
   g.players.forEach(p => { if (p.role === 'mafia' || p.id === 0) p.alive = false; });
   g.resultReason = 'Город нашёл всех участников мафии.';
   const output = run('resultPanel()');
@@ -133,7 +133,7 @@ test('result explains team victory, eliminated-player credit and net entry accou
   assert.match(output, /data-replay>Сыграть ещё · 100 V/); assert.match(output, /data-new>Изменить настройки/);
 });
 test('mafia parity and draw results explain the actual ending condition', () => {
-  const g = fixture('civilian'); g.over = true; g.phase = 'result'; g.win = false; g.winningTeam = 'mafia';
+  const g = fixture('civilian'); g.over = true; g.settled = true; g.phase = 'result'; g.win = false; g.winningTeam = 'mafia';
   g.players.forEach(p => { p.alive = p.role === 'mafia' || [0, 3].includes(p.id); });
   let output = run('resultPanel()');
   assert.match(output, /Твоя команда проиграла/); assert.match(output, /Мафии осталось 2, остальных жителей — 2/);
@@ -152,6 +152,33 @@ test('chronicle shows all retained events and identifies reverse chronology', ()
   const g = fixture(); g.log = Array.from({ length: 40 }, (_, i) => 'Событие ' + (40 - i));
   const output = run('logs()'); assert.match(output, /40 · новые сверху/);
   assert.match(output, /Событие 1<\/li>/); assert.match(output, /Событие 40<\/li>/);
+});
+
+test('voting archive remains readable during the next night and never exposes living roles', () => {
+  const g = fixture('civilian'); g.phase = 'night'; g.round = 2;
+  g.voteHistory = [{ round: 1, ballots: [{ voter: 1, target: 3 }, { voter: 2, target: 4 }], message: 'Голоса разделились.' }];
+  const output = run('voteArchive()'); assert.match(output, /Раунд 01/); assert.match(output, /Луна/); assert.match(output, /Мила/);
+  assert.ok(!output.includes('Доктор')); assert.ok(!output.includes('Мафия')); assert.match(run('logs()'), /Архив голосований/);
+  g.phase = 'vote'; assert.match(run('phasePanel()'), /data-open-vote-archive/);
+});
+test('archived names and discussion context are escaped and ordered newest first', () => {
+  const g = fixture(); g.players[1].name = '<script>bad</script>'; g.phase = 'day';
+  g.statements = [{ actor: 1, target: 2, text: 'Версия.', context: '<img src=x>' }];
+  g.voteHistory = [1,2].map(round => ({ round, ballots: [{ voter: 1, target: 2 }], message: '<img src=x>' }));
+  const output = run('logs()'); assert.ok(!output.includes('<script>')); assert.ok(!output.includes('<img'));
+  assert.match(output, /statement-context/); assert.ok(output.indexOf('Раунд 02') < output.indexOf('Раунд 01'));
+});
+test('past-vote link opens the archive and preserves focus', () => {
+  fixture(); let focus = 0, scroll = 0;
+  const archive = { open: false, scrollIntoView() { scroll++; }, querySelector() { return { focus() { focus++; } }; } };
+  selectors.set('[data-detail="vote-archive"]', archive); const link = {}; groups.set('[data-open-vote-archive]', [link]);
+  run('bind()'); link.onclick(); assert.equal(archive.open, true); assert.equal(focus, 1); assert.equal(scroll, 1);
+});
+
+test('an interrupted result offers retry without falsely claiming saved progress or replay', () => {
+  const g = fixture('civilian'); g.over = true; g.phase = 'result'; g.winningTeam = 'town'; g.win = true; g.settled = false;
+  const output = run('resultPanel()'); assert.match(output, /Результат ожидает сохранения/);
+  assert.match(output, /data-retry-settlement/); assert.ok(!output.includes('data-replay')); assert.ok(!output.includes('уже сохранён'));
 });
 
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.

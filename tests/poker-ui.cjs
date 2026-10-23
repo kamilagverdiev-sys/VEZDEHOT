@@ -41,7 +41,7 @@ async function harness({ store = new Map(), failRecord = false, scope = 'guest' 
     console, Date, Promise, AbortController,
     Math: Object.assign(Object.create(Math), { random() { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; } }),
     document,
-    window: { VEZDEHOT: platform, matchMedia: () => ({ matches: true }), addEventListener() {} },
+    window: { VEZDEHOT: platform, matchMedia: () => ({ matches: true }), addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); } },
     localStorage: { getItem: key => store.get(key) || null, setItem: (key, value) => store.set(key, String(value)), removeItem: key => store.delete(key) },
     setTimeout(fn) { const id = ++nextTimer; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
     __rendered() { renderCount++; }
@@ -52,7 +52,7 @@ render = function () { document.rendered = g ? controls() : intro(); bind(); __r
 window.__poker = { get g() { return g; }, get error() { return error; }, get accountChanging() { return accountChanging; },
   startHand, nextHand, closeTable, syncResult, commitUI, saveHand, controls, notice, bind, boot,
   pokerNewGame, pokerAction, pokerFinish, pokerContinue, legalActions, tableFinished,
-  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching };
+  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
   vm.createContext(context); vm.runInContext(inline.replace('\nboot();\n', '\n' + exposure + '\n'), context, { filename: 'poker.html' });
@@ -63,7 +63,7 @@ boot();`;
     renderCount: () => renderCount, profileOpens: () => profileOpens,
     setFailRecord(value) { failRecord = value; },
     setProfile(patch) { Object.assign(profile, patch); persistProfile(); },
-    dispatch(name) { for (const fn of events.get(name) || []) fn(); },
+    dispatch(name, event = {}) { for (const fn of events.get(name) || []) fn(event); },
     click(selector) { const button = groups.get(selector)?.[0]; assert.equal(typeof button?.onclick, 'function', 'Missing real binding: ' + selector); button.onclick({ currentTarget: button }); }
   };
 }
@@ -207,6 +207,34 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     assert.match(h.output(), /data-resolve/); h.click('[data-resolve]');
     assert.equal(g.over, true); assert.equal(h.api.g.id, id); assert.equal(h.api.g.handNumber, 1);
     assert.equal(h.profile().balance, 9900); assert.equal(h.profile().games, 0); assert.equal(h.timers.size, 0);
+  });
+  await test('bank-size presets include the call and preview the actual chip debit', async () => {
+    const h=await harness();h.click('[data-start]');const g=h.api.g;
+    g.toAct=0;g.currentBet=100;g.pot=400;Object.assign(g.players[0],{roundBet:20,totalBet:20,chips:980,actedAtBet:null});
+    const legal=h.api.legalActions(g,0),presets=plain(h.api.raisePresets(legal));
+    assert.equal(presets.find(x=>x.label==='½ банка').value,340);
+    assert.equal(presets.find(x=>x.label==='Банк').value,580);
+    h.api.setRaise(340);assert.match(h.api.raisePreview(),/Добавишь <b>320<\/b>/);assert.match(h.api.raisePreview(),/Останется <b>660<\/b>/);
+    assert.equal(h.api.raiseLabel(),'Рейз до 340');assert.ok(h.api.pokerAction(g,0,'raise',340));assert.equal(g.players[0].chips,660);
+    g.currentBet=0;h.api.setRaise(40);assert.equal(h.api.raiseLabel(),'Ставка · 40');
+    h.api.setRaise(g.players[0].roundBet+g.players[0].chips);assert.match(h.api.raiseLabel(),/^Ва-банк/);
+  });
+  await test('a damaged saved hand shows recovery text without crashing, charging or paying', async () => {
+    const h=await harness();h.click('[data-start]');const damaged=JSON.parse(h.store.get(SESSION));delete damaged.community;
+    h.store.set(SESSION,JSON.stringify(damaged));const restored=await harness({store:h.store});
+    assert.equal(restored.api.g,null);assert.equal(restored.profile().balance,9900);assert.equal(restored.recordCalls(),0);
+    assert.match(restored.output(),/Сохранённый стол повреждён/);assert.equal(JSON.parse(h.store.get(SESSION)).id,damaged.id,'corrupt snapshot remains intact until a new table is requested');
+  });
+  await test('betting view identifies both blinds and exposes touch-friendly wager feedback', async () => {
+    const h=await harness();h.click('[data-start]');h.api.g.toAct=0;
+    const markup=h.api.view();assert.match(markup,/aria-label="Малый блайнд"/);assert.match(markup,/aria-label="Большой блайнд"/);
+    assert.match(markup,/data-raise-preview aria-live="polite"/);assert.match(markup,/Ползунок выбирает сумму/);assert.match(markup,/aria-pressed=/);
+  });
+  await test('back-forward cache return shows a paused hand instead of a bot turn with no timer', async () => {
+    const h=await harness();h.click('[data-start]');const id=h.api.g.id;
+    h.dispatch('pagehide');assert.equal(h.api.g.paused,true);assert.equal(h.timers.size,0);
+    h.dispatch('pageshow',{persisted:true});assert.equal(h.api.g.id,id);assert.match(h.output(),/Продолжить игру/);
+    assert.equal(h.profile().balance,9900);assert.equal(h.recordCalls(),0);
   });
   new Function(inline);
   console.log(`${count} poker lifecycle UI checks passed`);

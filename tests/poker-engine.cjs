@@ -1,7 +1,7 @@
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
 const src=fs.readFileSync(path.join(__dirname,'../dist/poker.html'),'utf8').split('// POKER_ENGINE_START')[1].split('// POKER_ENGINE_END')[0];
 let seed=8844;const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/2**32};
-const ctx={Math:Object.assign(Object.create(Math),{random}),Date,console};vm.createContext(ctx);vm.runInContext(src+'\nthis.api={scoreFive,evaluate,pokerNewGame,pokerAction,pokerContinue,pokerFinish,splitPots,legalActions,pokerNext,contenders,botMove,makeDeck,pokerNextHand,pokerDeal,tableFinished,liveSeats};',ctx);const a=ctx.api;
+const ctx={Math:Object.assign(Object.create(Math),{random}),Date,console};vm.createContext(ctx);vm.runInContext(src+'\nthis.api={scoreFive,evaluate,pokerNewGame,pokerAction,pokerContinue,pokerFinish,splitPots,legalActions,pokerNext,contenders,botMove,makeDeck,pokerNextHand,pokerDeal,tableFinished,liveSeats,validPokerSave};',ctx);const a=ctx.api;
 const cards=str=>str.split(' ').map(x=>{const suit=x.slice(-1),rank=x.slice(0,-1),v=['2','3','4','5','6','7','8','9','10','J','Q','K','A'].indexOf(rank)+2;return {rank,suit,v,id:x,red:suit==='♥'||suit==='♦'}});
 let checks=0;function test(label,fn){fn();checks++;console.log('PASS '+label)}
 function custom(hands,board,contributions){const g=a.pokerNewGame('Ты','normal');g.players=g.players.slice(0,hands.length);g.players.forEach((p,i)=>Object.assign(p,{hand:cards(hands[i]),totalBet:contributions[i],roundBet:contributions[i],chips:1000-contributions[i],folded:false,acted:false,actedAtBet:null}));g.community=cards(board);g.pot=contributions.reduce((n,x)=>n+x,0);g.phase='betting';g.toAct=0;return g}
@@ -73,5 +73,25 @@ test('120 continuous seeded tables preserve all chips and cards across eliminati
     }
   }
   assert(hands>240,'exercise multiple hands per table');assert(eliminated>0,'exercise seats after busting');assert(headsUp>0,'exercise heads-up tables');console.log('Continuous table coverage: '+hands+' hands, '+eliminated+' eliminated-seat observations, '+headsUp+' heads-up hands');
+});
+test('save validation accepts every phase of genuine hands and rejects broken card/chip state',()=>{
+  const clone=g=>JSON.parse(JSON.stringify(g));
+  for(let trial=0;trial<20;trial++){
+    const g=a.pokerNewGame('Игрок','normal',trial%4);let steps=0;
+    while(!g.over&&steps++<100){assert.equal(a.validPokerSave(clone(g)),true,'valid live save');if(g.phase==='review')a.pokerContinue(g);else{const legal=a.legalActions(g,g.toAct);a.pokerAction(g,g.toAct,legal.check?'check':'call')}}
+    assert.equal(a.validPokerSave(clone(g)),true,'valid complete save');
+    const next=a.pokerNextHand(g);assert.equal(a.validPokerSave(clone(next)),true,'valid next hand');
+    const duplicate=clone(g);duplicate.deck[0]=duplicate.community[0];assert.equal(a.validPokerSave(duplicate),false);
+    const chips=clone(g);chips.players[0].chips+=1;assert.equal(a.validPokerSave(chips),false);
+    const payout=clone(g);payout.payout+=100;assert.equal(a.validPokerSave(payout),false);
+    const missing=clone(g);delete missing.players[1].hand;assert.equal(a.validPokerSave(missing),false);
+    const badHistory=clone(g);badHistory.tableHistory=[{}];assert.equal(a.validPokerSave(badHistory),false);
+  }
+  for(const bad of [null,{},[],{version:3,players:[null,null,null,null]}])assert.equal(a.validPokerSave(bad),false);
+});
+test('the first postflop wager is logged as a bet rather than a raise',()=>{
+  const g=a.pokerNewGame('Ты','normal',1);
+  while(g.phase==='betting'){const legal=a.legalActions(g,g.toAct);assert(a.pokerAction(g,g.toAct,legal.check?'check':'call'))}
+  assert(a.pokerContinue(g));const i=g.toAct;assert.equal(g.currentBet,0);assert(a.pokerAction(g,i,'raise',40));assert.match(g.lastAction,/ — ставка 40$/);
 });
 console.log(checks+' poker checks passed');

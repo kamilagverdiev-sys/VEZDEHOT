@@ -31,7 +31,7 @@ function harness(options={}){
   })};
   const context={
     window:{VEZDEHOT_AUTH_CONFIG:{url:'https://project.supabase.co',publishableKey:'public',googleEnabled:false,telegramEnabled:false,telegramProvider:'custom:telegram',...options.config},supabase:{createClient:(url,key,opts)=>{clientOptions=opts;return client}},addEventListener:(type,fn)=>listen('window',type,fn),Telegram:options.telegram},
-    localStorage:{getItem:key=>store.get(key)||null,setItem:(key,value)=>store.set(key,value)},
+    localStorage:{getItem:key=>{if(options.blockRead)throw new Error('Storage denied');return store.get(key)||null},setItem:(key,value)=>{if(options.blockWrite)throw new Error('Storage quota exceeded');store.set(key,value)}},
     document:{documentElement:{dataset:{}},addEventListener:(type,fn)=>listen('document',type,fn),dispatchEvent:event=>dispatch('document',event),querySelector:()=>null},
     CustomEvent:class{constructor(type,init){this.type=type;this.detail=init?.detail}},
     location:{search:'',origin:'https://app.test',assign:url=>navigation.push(url)},
@@ -169,4 +169,47 @@ test('invalid Telegram proof never creates a local signed-in identity',async t=>
   const h=harness({config:{telegramMiniAppEnabled:true,telegramAuthUrl:'https://project.supabase.co/functions/v1/telegram-auth'},telegram:{WebApp:{initData:'bad-proof'}},fetch:async input=>String(input).includes('/functions/')?{ok:false,json:async()=>({error:'invalid_signature'})}:{ok:true,json:async()=>({external:{}})}});
   t.after(()=>h.close());await h.api.ready;await assert.rejects(()=>h.api.login('telegram'),/Telegram не подтвердил/);
   assert.equal(h.verifyCalls,0);assert.equal(h.api.account().user,null);assert.equal(h.api.account().scope,'guest');
+});
+
+
+test('blocked browser storage cannot crash boot and session profile remains usable',async t=>{
+  const h=harness({blockRead:true,blockWrite:true});t.after(()=>h.close());await h.api.ready;
+  assert.equal(h.api.account().storagePersisted,false);assert.equal(h.api.getProfile().balance,10000);
+  h.api.updateProfile({nick:'Session player',balance:9900});h.api.saveMainState({view:'durak',round:'temporary'});
+  h.api.recordResult({id:'temporary-result',game:'durak',delta:250,xp:25,win:true});
+  assert.equal(h.api.getProfile().balance,10150);assert.equal(h.api.loadMainState().round,'temporary');
+  assert.equal(h.api.loadMainState().nick,'Session player');assert.equal(h.store.size,0);
+});
+
+test('quota failures do not silently reread old main state over the current session',async t=>{
+  const store=new Map([['vezdehot:main:guest',JSON.stringify({view:'lobby',round:'old'})]]);
+  const h=harness({store,blockWrite:true});t.after(()=>h.close());await h.api.ready;
+  h.api.saveMainState({view:'bunker',round:'current'});
+  assert.equal(h.api.loadMainState().round,'current');assert.equal(h.api.account().storagePersisted,false);
+  assert.equal(JSON.parse(store.get('vezdehot:main:guest')).round,'old');
+});
+
+test('malformed cached profile and pending queue recover without blocking cloud hydration',async t=>{
+  const store=new Map([['vezdehot:profile:'+A,'42'],['vezdehot:pending:'+A,'{"not":"a queue"}']]);
+  const h=harness({store,session:session(A),profiles:{[A]:profile('Recovered',12345)}});t.after(()=>h.close());await h.api.ready;
+  assert.equal(h.api.getProfile().nick,'Recovered');assert.equal(h.api.getProfile().balance,12345);
+  assert.equal(h.api.account().status,'saved');assert.equal(h.api.account().loading,false);
+});
+
+test('pending operations reject corrupt entries and normalize string rewards before replay',async t=>{
+  const store=new Map([['vezdehot:pending:'+A,JSON.stringify([null,{},'bad',{kind:'result',value:null},{kind:'unexpected',value:{}},{kind:'result',value:{id:'wrong',game:'unknown',delta:9000}},{kind:'result',value:{id:'valid',game:'durak',win:'false',delta:'250',xp:'25',at:'2026-10-23T12:00:00Z'}},{kind:'patch',value:{nick:'Offline name'}}])]]);
+  const h=harness({store,session:session(A),profiles:{[A]:profile('Cloud',30000)}});t.after(()=>h.close());await h.api.ready;
+  assert.equal(h.api.getProfile().balance,30250);assert.equal(h.api.getProfile().games,1);assert.equal(h.api.getProfile().wins,0);assert.equal(h.api.getProfile().xp,25);assert.equal(h.api.getProfile().nick,'Offline name');
+});
+
+test('an already open account panel unlocks saving and updates cloud status after hydration',async t=>{
+  const h=harness({session:session(A)});t.after(()=>h.close());await tick();
+  const fields=new Map(['[data-save-state]','[data-save-state-copy]','[data-profile-balance]','[data-sync-profile]','[data-save-profile]','[data-account-exit]','.vh-auth-message'].map(key=>[key,{dataset:{},disabled:true,hidden:false,textContent:'',innerHTML:''}]));
+  h.context.document.querySelector=selector=>selector==='#vh-account'?{querySelector:key=>fields.get(key),querySelectorAll:()=>[]}:null;
+  h.reads[0].resolve({data:profile('Loaded',12000)});await h.api.ready;
+  assert.equal(fields.get('[data-save-profile]').disabled,false);assert.equal(fields.get('[data-account-exit]').disabled,false);
+  assert.match(fields.get('[data-save-state-copy]').textContent,/синхронизирован/);assert.equal(fields.get('[data-save-state]').dataset.status,'saved');
+  assert.equal(fields.get('[data-sync-profile]').hidden,true);assert.match(fields.get('[data-profile-balance]').innerHTML,/12/);
+  h.api.updateProfile({nick:'Unsynced edit'});assert.equal(fields.get('[data-save-state]').dataset.status,'local');assert.match(fields.get('[data-save-state-copy]').textContent,/ожидает отправки/);
+  await h.api.sync();assert.equal(fields.get('[data-save-state]').dataset.status,'saved');
 });
