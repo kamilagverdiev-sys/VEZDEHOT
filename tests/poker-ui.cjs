@@ -6,7 +6,7 @@ const inline = html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
 const PROFILE = 'poker-test-profile', SESSION = 'vezdehot_poker_v2_guest';
 const plain = value => JSON.parse(JSON.stringify(value));
 
-async function harness({ store = new Map(), failRecord = false, scope = 'guest' } = {}) {
+async function harness({ store = new Map(), failRecord = false, scope = 'guest', sharedStore = true, failStorage = false, owner = true } = {}) {
   const events = new Map(), groups = new Map(), timers = new Map();
   let nextTimer = 0, seed = 88091, renderCount = 0, recordCalls = 0, profileOpens = 0;
   const initial = { nick: 'Игрок', balance: 10000, games: 0, wins: 0, xp: 0, resultIds: [], history: [] };
@@ -22,6 +22,7 @@ async function harness({ store = new Map(), failRecord = false, scope = 'guest' 
     updateProfile(patch) { profile = { ...profile, ...plain(patch) }; persistProfile(); },
     recordResult(entry) {
       recordCalls++;
+      if (failRecord === 'return') return { ok: false };
       if (failRecord) throw new Error('Simulated local write failure');
       if (profile.resultIds.includes(entry.id)) return plain(profile);
       profile = { ...profile, balance: profile.balance + entry.delta, games: profile.games + 1,
@@ -29,39 +30,46 @@ async function harness({ store = new Map(), failRecord = false, scope = 'guest' 
         resultIds: [...profile.resultIds, entry.id], history: [plain(entry), ...profile.history] };
       persistProfile(); return plain(profile);
     },
-    openAccount() { profileOpens++; }
+    openAccount() { profileOpens++; },
+    renderSaveNotice(game, id) { const state = context.window.VEZDEHOT_GAME_STORE?.status(game, id); return state && ['unavailable', 'corrupt', 'recovered'].includes(state.status) ? `<div role="status">${state.message}</div>` : ''; }
   };
   const document = {
     hidden: false, rendered: '', documentElement: { dataset: {}, classList: { contains: () => false } }, body: { classList: { contains: () => false } },
     querySelector: selector => selectors.get(selector) || null,
     querySelectorAll: selector => groups.get(selector) || [],
-    addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); }
+    addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); },
+    dispatchEvent(event) { for (const fn of events.get(event.type) || []) fn(event); }
   };
   const context = {
-    console, Date, Promise, AbortController,
+    console, Date, Promise, AbortController, CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
     Math: Object.assign(Object.create(Math), { random() { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; } }),
     document,
-    window: { VEZDEHOT: platform, matchMedia: () => ({ matches: true }), addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); } },
-    localStorage: { getItem: key => store.get(key) || null, setItem: (key, value) => store.set(key, String(value)), removeItem: key => store.delete(key) },
+    window: { VEZDEHOT: platform, VEZDEHOT_TAB_SESSION: { canWrite: () => owner }, matchMedia: () => ({ matches: true }), addEventListener(name, fn) { if (!events.has(name)) events.set(name, []); events.get(name).push(fn); } },
+    localStorage: { getItem: key => store.get(key) || null, setItem(key, value) { if (failStorage) { const error = new Error('Quota exceeded'); error.name = 'QuotaExceededError'; throw error; } store.set(key, String(value)); }, removeItem(key) { if (failStorage) throw new Error('Storage unavailable'); store.delete(key); } },
     setTimeout(fn) { const id = ++nextTimer; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
     __rendered() { renderCount++; }
   };
   // Replace only DOM patching, retaining shipped lifecycle functions, controls and event handlers.
   const exposure = `
-render = function () { document.rendered = g ? controls() : intro(); bind(); __rendered(); };
+render = function () { document.rendered = saveNotice() + (g ? controls() : intro()); bind(); __rendered(); };
 window.__poker = { get g() { return g; }, get error() { return error; }, get accountChanging() { return accountChanging; },
-  startHand, nextHand, closeTable, syncResult, commitUI, saveHand, controls, notice, bind, boot,
+  startHand, nextHand, closeTable, syncResult, commitUI, saveHand, saveNotice, controls, notice, bind, boot, takeAction, continueHand, togglePause, canPlay,
   pokerNewGame, pokerAction, pokerFinish, pokerContinue, legalActions, tableFinished,
   resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
-  vm.createContext(context); vm.runInContext(inline.replace('\nboot();\n', '\n' + exposure + '\n'), context, { filename: 'poker.html' });
+  vm.createContext(context);
+  if (sharedStore) vm.runInContext(fs.readFileSync(path.join(__dirname, '../dist/game-store.js'), 'utf8'), context, { filename: 'game-store.js' });
+  vm.runInContext(inline.replace('\nboot();\n', '\n' + exposure + '\n'), context, { filename: 'poker.html' });
   await Promise.resolve(); await Promise.resolve();
   return {
     api: context.window.__poker, context, store, timers, app, groups,
     profile: () => plain(profile), output: () => document.rendered, recordCalls: () => recordCalls,
     renderCount: () => renderCount, profileOpens: () => profileOpens,
     setFailRecord(value) { failRecord = value; },
+    setFailStorage(value) { failStorage = value; },
+    setOwner(value) { owner = value; },
+    saves: context.window.VEZDEHOT_GAME_STORE,
     setProfile(patch) { Object.assign(profile, patch); persistProfile(); },
     dispatch(name, event = {}) { for (const fn of events.get(name) || []) fn(event); },
     click(selector) { const button = groups.get(selector)?.[0]; assert.equal(typeof button?.onclick, 'function', 'Missing real binding: ' + selector); button.onclick({ currentTarget: button }); }
@@ -130,7 +138,7 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
   });
   await test('profile deduplication recovers a crash after payout but before the table settled flag was saved', async () => {
     const h = await harness(); h.click('[data-start]'); const g = finishWithHumanWinner(h); h.click('[data-cashout]');
-    const saved = JSON.parse(h.store.get(SESSION)); saved.settled = false; h.store.set(SESSION, JSON.stringify(saved));
+    const saved = plain(h.api.g); saved.settled = false; h.saves.save('poker', 'guest', saved);
     const restored = await harness({ store: h.store });
     assert.equal(restored.profile().balance, 9900 + g.payout); assert.equal(restored.profile().games, 1); assert.equal(restored.recordCalls(), 1);
     assert.equal(restored.api.g.settled, true); assert.equal(restored.profile().history.length, 1);
@@ -145,7 +153,7 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     h.click('[data-next]'); assert.equal(h.api.g.id, g.id);
   });
   await test('completed legacy v2 saves do not pay again and new-table action enters directly', async () => {
-    const h = await harness(); h.click('[data-start]'); const g = finishWithHumanWinner(h);
+    const h = await harness({sharedStore:false}); h.click('[data-start]'); const g = finishWithHumanWinner(h);
     Object.assign(g, { version: 2, settled: true }); h.api.saveHand();
     h.setProfile({ balance: 10000 + g.profit, games: 1, resultIds: [g.id] });
     const restored = await harness({ store: h.store }); const balance = restored.profile().balance;
@@ -154,7 +162,7 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     assert.equal(restored.api.g.version, 3); assert.notEqual(restored.api.g.id, g.id); assert.equal(restored.profile().balance, balance - 100);
   });
   await test('an unfinished legacy hand can complete under its old payout contract exactly once', async () => {
-    const h = await harness(); h.click('[data-start]'); h.api.g.version = 2; h.api.saveHand();
+    const h = await harness({sharedStore:false}); h.click('[data-start]'); h.api.g.version = 2; h.api.saveHand();
     const restored = await harness({ store: h.store }); const g = finishWithHumanWinner(restored);
     assert.equal(restored.profile().balance, 9900 + g.payout); assert.equal(restored.profile().games, 1);
     assert.equal(restored.profile().history[0].id, g.id); assert.equal(restored.api.g.settled, true);
@@ -220,10 +228,10 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     h.api.setRaise(g.players[0].roundBet+g.players[0].chips);assert.match(h.api.raiseLabel(),/^Ва-банк/);
   });
   await test('a damaged saved hand shows recovery text without crashing, charging or paying', async () => {
-    const h=await harness();h.click('[data-start]');const damaged=JSON.parse(h.store.get(SESSION));delete damaged.community;
-    h.store.set(SESSION,JSON.stringify(damaged));const restored=await harness({store:h.store});
+    const h=await harness();h.click('[data-start]');const damaged=plain(h.api.g);delete damaged.community;
+    const damagedStore=new Map([[PROFILE,h.store.get(PROFILE)],[SESSION,JSON.stringify(damaged)]]);const restored=await harness({store:damagedStore});
     assert.equal(restored.api.g,null);assert.equal(restored.profile().balance,9900);assert.equal(restored.recordCalls(),0);
-    assert.match(restored.output(),/Сохранённый стол повреждён/);assert.equal(JSON.parse(h.store.get(SESSION)).id,damaged.id,'corrupt snapshot remains intact until a new table is requested');
+    assert.match(restored.output(),/поврежд|восстанов/i);assert.equal(JSON.parse(damagedStore.get(SESSION)).id,damaged.id,'corrupt snapshot remains intact until a new table is requested');
   });
   await test('betting view identifies both blinds and exposes touch-friendly wager feedback', async () => {
     const h=await harness();h.click('[data-start]');h.api.g.toAct=0;
@@ -234,6 +242,60 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     const h=await harness();h.click('[data-start]');const id=h.api.g.id;
     h.dispatch('pagehide');assert.equal(h.api.g.paused,true);assert.equal(h.timers.size,0);
     h.dispatch('pageshow',{persisted:true});assert.equal(h.api.g.id,id);assert.match(h.output(),/Продолжить игру/);
+    assert.equal(h.profile().balance,9900);assert.equal(h.recordCalls(),0);
+  });
+  await test('legacy scoped tables migrate into the shared store without entry fees or lost chips', async () => {
+    const old=await harness({sharedStore:false});old.click('[data-start]');const id=old.api.g.id,legacy=old.store.get(SESSION);
+    const migrated=await harness({store:old.store});
+    assert.equal(migrated.api.g.id,id);assert.equal(migrated.api.g.paused,true);assert.equal(migrated.profile().balance,9900);
+    assert.equal(migrated.recordCalls(),0);assert.equal(migrated.store.get(SESSION),legacy,'migration preserves the legacy recovery source');
+    assert.ok(migrated.store.has('vezdehot:session:v1:guest:poker'));
+    const other=await harness({store:old.store,scope:'other-profile'});assert.equal(other.api.g,null,'a different profile cannot import the guest table');
+  });
+  await test('a corrupt current snapshot restores a verified previous hand and explains recovery', async () => {
+    const h=await harness();h.click('[data-start]');const id=h.api.g.id;
+    h.api.togglePause();const primary='vezdehot:session:v1:guest:poker';h.store.set(primary,'{broken-json');
+    const restored=await harness({store:h.store});
+    assert.equal(restored.api.g.id,id);assert.equal(restored.api.g.paused,true);assert.equal(restored.profile().balance,9900);
+    assert.equal(restored.recordCalls(),0);assert.equal(restored.timers.size,0);assert.match(restored.output(),/восстанов|резерв/i);
+    assert.equal(restored.store.get(primary),'{broken-json','recovery does not overwrite the damaged evidence automatically');
+  });
+  await test('quota failures stay visible and a retry saves the latest in-memory hand', async () => {
+    const h=await harness();h.click('[data-start]');const primary='vezdehot:session:v1:guest:poker',durable=h.store.get(primary);
+    h.setFailStorage(true);h.api.togglePause();
+    assert.equal(h.saves.status('poker','guest').pending,true);assert.equal(h.store.get(primary),durable);
+    assert.match(h.output(),/памят|сохран|закрыв/i);assert.equal(h.api.g.paused,true);
+    h.setFailStorage(false);assert.equal(h.saves.retry('poker','guest').ok,true);
+    const restored=await harness({store:h.store});assert.equal(restored.api.g.id,h.api.g.id);assert.equal(restored.api.g.paused,true);
+    assert.equal(restored.profile().balance,9900);assert.equal(restored.recordCalls(),0);
+  });
+  await test('retrying a failed snapshot never invents a settled payout', async () => {
+    const h=await harness({failRecord:'return'});h.click('[data-start]');const g=finishWithHumanWinner(h);
+    h.click('[data-cashout]');assert.equal(g.settled,false);assert.equal(h.profile().balance,9900);assert.match(h.output(),/data-cashout/);
+    h.setFailStorage(true);h.api.saveHand();h.setFailStorage(false);assert.equal(h.saves.retry('poker','guest').ok,true);
+    assert.equal(h.saves.peek('poker','guest').state.settled,false);assert.equal(h.profile().games,0);
+    h.setFailRecord(false);h.click('[data-cashout]');h.click('[data-cashout]');
+    assert.equal(g.settled,true);assert.equal(h.api.error,'');assert.equal(h.profile().balance,9900+g.payout);assert.equal(h.profile().games,1);
+    const restored=await harness({store:h.store});assert.equal(restored.profile().games,1);assert.equal(restored.recordCalls(),0);
+  });
+  await test('legacy payout failures keep an honest pending result until a successful retry', async () => {
+    const old=await harness({sharedStore:false});old.click('[data-start]');old.api.g.version=2;old.api.saveHand();
+    const h=await harness({store:old.store,failRecord:'return'});finishWithHumanWinner(h);
+    assert.equal(h.api.g.settled,false);assert.match(h.api.notice()[0],/ожидает/);assert.match(h.output(),/data-cashout/);
+    h.setFailRecord(false);h.click('[data-cashout]');assert.equal(h.api.g.settled,true);assert.equal(h.api.error,'');assert.equal(h.profile().games,1);
+  });
+  await test('ownership transfer first saves a pause, then blocks all stale gameplay', async () => {
+    const h=await harness();h.click('[data-start]');const id=h.api.g.id;
+    h.dispatch('vezdehot:sessionpause');assert.equal(h.api.g.paused,true);assert.equal(h.saves.peek('poker','guest').state.paused,true);assert.equal(h.timers.size,0);
+    h.setOwner(false);h.dispatch('vezdehot:sessionlost');const snapshot=JSON.stringify(h.api.g),entries=JSON.stringify([...h.store]);
+    h.click('[data-next]');h.click('[data-cashout]');h.click('[data-new]');h.api.togglePause();h.api.continueHand();h.api.takeAction('fold');h.api.commitUI();h.api.saveHand();
+    assert.equal(JSON.stringify(h.api.g),snapshot);assert.equal(JSON.stringify([...h.store]),entries);assert.equal(h.api.g.id,id);
+    assert.equal(h.app.inert,true);assert.equal(h.app.style.pointerEvents,'none');assert.equal(h.recordCalls(),0);
+  });
+  await test('lost ownership blocks already queued bot callbacks before a UI event arrives', async () => {
+    const h=await harness();h.click('[data-start]');const queued=[...h.timers.values()];assert.ok(queued.length);
+    const snapshot=JSON.stringify(h.api.g),entries=JSON.stringify([...h.store]);h.setOwner(false);for(const callback of queued)callback();
+    h.api.saveHand();h.api.startHand();h.api.syncResult();assert.equal(JSON.stringify(h.api.g),snapshot);assert.equal(JSON.stringify([...h.store]),entries);
     assert.equal(h.profile().balance,9900);assert.equal(h.recordCalls(),0);
   });
   new Function(inline);

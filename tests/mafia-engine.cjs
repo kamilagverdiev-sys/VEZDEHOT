@@ -27,6 +27,25 @@ test('public voting archive survives new rounds and a reload without hidden role
 test('unsettled completed result is retried on restore and marked settled only after recording',()=>{const g=fixture('civilian');const record=ctx.window.VEZDEHOT.recordResult;ctx.window.VEZDEHOT.recordResult=()=>{throw Error('interrupted')};api.endGame('town','done');assert.equal(g.settled,false);const pendingBalance=p.balance;api.start();assert.equal(ctx.g.id,g.id);assert.equal(p.balance,pendingBalance);api.reset();assert.equal(ctx.g.id,g.id);assert.equal(JSON.parse(store.get('vezdehot_mafia_v3_test-user')).settled,false);ctx.window.VEZDEHOT.recordResult=record;const before=results;run('g=null');api.restore();assert.equal(ctx.g.settled,true);assert.equal(results,before+1);run('g=null');api.restore();assert.equal(results,before+1)});
 test('older saves recover their last public ballots with the original round',()=>{const g=fixture();g.phase='night';g.round=3;g.votes=null;g.ballots=[{voter:0,target:1}];delete g.voteHistory;api.saveState();run('g=null');api.restore();assert.equal(ctx.g.voteHistory[0].round,2);assert.equal(ctx.g.voteHistory[0].ballots[0].target,1)});
 test('statement context contains only public prior ballots, never private investigation',()=>{const g=fixture();g.voteHistory=[{round:1,ballots:[{voter:1,target:4}],message:'Публичный итог'}];g.knowledge[0]={1:'mafia'};const before=run('statementReason(g.players[1])');g.players[1].role='doctor';g.knowledge[0][1]='town';assert.equal(run('statementReason(g.players[1])'),before);assert.match(before,/Луна → Север/);assert(!before.includes('мафия'))});
+test('restore rejects broken nested state before any renderer or bot can consume it',()=>{
+ const original=JSON.stringify(fixture());
+ for(const mutate of [x=>delete x.privateNotes,x=>x.players[1].role='unknown',x=>x.players[1].id=0,x=>x.players[0].alive='yes',x=>x.phase='unknown',x=>x.knowledge={0:null},x=>x.statements=[{actor:1,target:99,text:'broken'}],x=>x.ballots=[{voter:1,target:88}],x=>x.voteHistory=[{round:1,ballots:null,message:'broken'}],x=>x.revealed=[99],x=>x.over=true]){
+  const broken=JSON.parse(original);mutate(broken);store.set('vezdehot_mafia_v3_test-user',JSON.stringify(broken));api.restore();assert.equal(ctx.g,null);
+ }
+});
+test('a malformed runtime state cannot overwrite the last usable save',()=>{
+ const g=fixture();api.saveState();const good=store.get('vezdehot_mafia_v3_test-user');g.knowledge={0:null};assert.equal(api.saveState(),false);assert.equal(store.get('vezdehot_mafia_v3_test-user'),good);
+});
+test('paused state survives a reload until the player explicitly resumes',()=>{
+ fixture();api.togglePause();run('g=null;paused=false');api.restore();assert.equal(ctx.paused,true);const before=ctx.g.phase;api.confirmNight();assert.equal(ctx.g.phase,before);api.togglePause();assert.equal(ctx.paused,false);
+});
+test('a non-owning tab cannot act, charge an entry, save, or settle a result',()=>{
+ const g=fixture('civilian');api.saveState();const snapshot=JSON.stringify(g),balanceBefore=p.balance,savesBefore=JSON.stringify([...store]),resultsBefore=results;
+ ctx.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};
+ api.chooseNight(1);api.confirmNight();api.beginDay();api.beginVote();api.chooseVote(1);api.castVote();api.continueAfterVote();api.togglePause();api.endGame('town','blocked');api.saveState();api.start();api.reset();api.restore();
+ assert.equal(JSON.stringify(g),snapshot);assert.equal(p.balance,balanceBefore);assert.equal(results,resultsBefore);assert.equal(JSON.stringify([...store]),savesBefore);
+ run('g=null');api.start();assert.equal(ctx.g,null);assert.equal(p.balance,balanceBefore);delete ctx.window.VEZDEHOT_TAB_SESSION;
+});
 test('120 seeded games complete with legal players, team results and no timers',()=>{p.balance=50000;for(let n=0;n<120;n++){run('g=null;paused=false');api.start();let actions=0;while(!ctx.g.over&&actions++<200){const g=ctx.g;if(g.phase==='night'){const me=g.players[0];if(me.alive&&me.role!=='civilian'){const target=g.players.find(x=>api.targetable(x,me.role,me));if(target)api.chooseNight(target.id)}api.confirmNight()}else if(g.phase==='dawn')api.beginDay();else if(g.phase==='day')api.beginVote();else if(g.phase==='vote'){if(g.players[0].alive){const target=g.players.find(x=>api.targetable(x,'vote',g.players[0]));api.chooseVote(target.id)}api.castVote()}else if(g.phase==='voteResult')api.continueAfterVote();else throw Error(g.phase)}assert(ctx.g.over);assert(['town','mafia','draw'].includes(ctx.g.winningTeam));assert.equal(ctx.g.players.length,7);assert.equal(new Set(ctx.g.revealed).size,ctx.g.revealed.length)}});
 assert(!source.includes('setTimeout'),'all progression must be explicit');
 console.log(`${tests} Mafia checks passed`);

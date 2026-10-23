@@ -4,10 +4,11 @@
 const LEGACY='vezdehot_v2',PREFIX='vezdehot:profile:',ACTIVE='vezdehot:active';
 const BASE={nick:'Игрок',balance:10000,xp:0,wins:0,games:0,bonusAt:0,avatar:'✦',durakPace:'calm',reduceMotion:false,history:[],resultIds:[],dirty:false,revision:0};
 const config=window.VEZDEHOT_AUTH_CONFIG||{},esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let storageFailed=false;const memoryStore=new Map(),ephemeralKeys=new Set();
+let storageFailed=false,handoffFlush=false,activePointerStale=false;const memoryStore=new Map(),ephemeralKeys=new Set();
+function ownsProfile(){return window.VEZDEHOT_TAB_SESSION?.canWrite()!==false}
 const stored=k=>{if(ephemeralKeys.has(k))return memoryStore.get(k)||null;try{return localStorage.getItem(k)}catch{storageFailed=true;return memoryStore.get(k)||null}};
 const read=(k,f={})=>{try{return JSON.parse(stored(k))??f}catch{return f}};
-const write=(k,v)=>{let value;try{value=JSON.stringify(v)}catch{return false}memoryStore.set(k,value);try{localStorage.setItem(k,value);ephemeralKeys.delete(k);return true}catch{ephemeralKeys.add(k);storageFailed=true;return false}};
+const write=(k,v)=>{if((!ownsProfile()&&!handoffFlush)||(k===ACTIVE&&activePointerStale))return false;let value;try{value=JSON.stringify(v)}catch{return false}memoryStore.set(k,value);try{localStorage.setItem(k,value);ephemeralKeys.delete(k);storageFailed=ephemeralKeys.size>0;return true}catch{ephemeralKeys.add(k);storageFailed=true;return false}};
 const num=(v,f=0)=>Number.isFinite(+v)?Math.max(0,Math.min(2000000000,Math.floor(+v))):f;
 const timestamp=v=>Number.isFinite(+v)?Math.max(0,Math.min(Number.MAX_SAFE_INTEGER,Math.floor(+v))):0;
 const avatars=['✦','◈','♠','✿','△','☾','✹','◇'];
@@ -19,25 +20,24 @@ async function networkFetch(input,options={}){const controller=new AbortControll
 
 // The remembered scope enables offline play; it does not establish an authenticated session.
 let scope=read(ACTIVE,'guest');if(typeof scope!=='string'||!/^([a-f0-9-]{36}|guest)$/.test(scope))scope='guest';
-if(!stored(PREFIX+'guest'))write(PREFIX+'guest',clean(scope==='guest'?read(LEGACY,read('uniq_play_v1',BASE)):BASE));
 let profile=clean(read(PREFIX+scope,BASE)),client=null,user=null,booted=false,syncTimer=null,syncFlight=null;
 let cloudState='local',authError='',providers={google:!!config.googleEnabled,telegram:!!config.telegramEnabled};
-let activationEpoch=0,activationFlight=null,hydrating=false,cloudHydrated=false,hydrationOps=pendingOperations(scope),accountSwitching=false;
+let activationEpoch=0,activationRequest=0,activationFlight=null,hydrating=false,cloudHydrated=false,hydrationOps=pendingOperations(scope),accountSwitching=false;
 let resolveReady;const ready=new Promise(r=>resolveReady=r);
-function current(id,epoch){return scope===id&&user?.id===id&&activationEpoch===epoch}
-function compatibility(){const old=read(LEGACY,{});write(LEGACY,{...old,...getProfile()});write(PREFIX+scope,profile);write(ACTIVE,scope);document.documentElement.dataset.motion=profile.reduceMotion?'reduced':'full'}
+function current(id,epoch){return (ownsProfile()||handoffFlush)&&scope===id&&user?.id===id&&activationEpoch===epoch}
+function compatibility(){if(!ownsProfile()&&!handoffFlush)return false;const saved=write(PREFIX+scope,profile);write(ACTIVE,scope);document.documentElement.dataset.motion=profile.reduceMotion?'reduced':'full';return saved&&ephemeralKeys.size===0}
 function getProfile(){return {...profile,history:profile.history.map(x=>({...x})),resultIds:[...profile.resultIds]}}
 function emit(){document.dispatchEvent(new CustomEvent('vezdehot:profile',{detail:getProfile()}));refreshAccountProviders()}
 function applyPatch(target,patch){const next={...target};let changed=false;for(const key of PROFILE_FIELDS)if(patch[key]!==undefined&&patch[key]!==next[key]){next[key]=patch[key];changed=true}return changed?clean({...next,dirty:true,revision:target.revision+1}):target}
 function applyResult(target,entry){if(target.resultIds.includes(entry.id))return target;return clean({...target,balance:Math.max(0,target.balance+entry.delta),xp:target.xp+entry.xp,wins:target.wins+(entry.win?1:0),games:target.games+1,history:[entry,...target.history],resultIds:[...target.resultIds,entry.id],dirty:true,revision:target.revision+1})}
 function pendingOperations(id){const saved=read('vezdehot:pending:'+id,[]);if(!Array.isArray(saved))return [];return saved.filter(op=>op&&typeof op==='object'&&op.value&&typeof op.value==='object'&&!Array.isArray(op.value)&&(op.kind==='patch'||(op.kind==='result'&&typeof op.value.id==='string'&&op.value.id.length&&['durak','bunker','poker','mafia','monopoly'].includes(op.value.game)))).map(op=>op.kind==='patch'?{kind:'patch',value:op.value}:{kind:'result',value:{...op.value,id:op.value.id.slice(0,100),win:op.value.win===true,delta:Math.max(-2000000,Math.min(2000000,Math.floor(Number(op.value.delta)||0))),xp:num(op.value.xp),synced:false}})}
 function applyOperation(target,op){return op.kind==='patch'?applyPatch(target,op.value):applyResult(target,op.value)}
-function mutate(op){if(accountSwitching)return getProfile();const next=applyOperation(profile,op);if(next===profile)return getProfile();if(scope!=='guest'&&(hydrating||!cloudHydrated)){hydrationOps.push(op);write('vezdehot:pending:'+scope,hydrationOps)}profile=next;if(user&&cloudHydrated)cloudState='local';compatibility();emit();queueSync();return getProfile()}
+function mutate(op){if(accountSwitching||!ownsProfile())return {...getProfile(),ok:false,persisted:false};retryLocalProfile();const next=applyOperation(profile,op);if(next===profile){const persisted=compatibility();return {...getProfile(),ok:true,persisted}}if(scope!=='guest'&&(hydrating||!cloudHydrated)){hydrationOps.push(op);write('vezdehot:pending:'+scope,hydrationOps)}profile=next;if(user&&cloudHydrated)cloudState='local';const persisted=compatibility();emit();queueSync();return {...getProfile(),ok:true,persisted}}
 function updateProfile(patch={}){const safe={};for(const key of PROFILE_FIELDS)if(patch[key]!==undefined)safe[key]=patch[key];return mutate({kind:'patch',value:safe})}
-function saveMainState(state){if(accountSwitching)return;const pp=getProfile();write('vezdehot:main:'+scope,{...state,...pp});write(LEGACY,{...state,...pp})}
-function loadMainState(){const saved=read('vezdehot:main:'+scope,scope==='guest'?read(LEGACY,{}):{});return {...saved,...getProfile()}}
-function recordResult(result){if(!result||!['durak','bunker','poker','mafia','monopoly'].includes(result.game))return getProfile();const id=String(result.id||crypto.randomUUID()).slice(0,100),delta=Math.max(-2000000,Math.min(2000000,Math.floor(Number(result.delta)||0)));return mutate({kind:'result',value:{id,game:result.game,win:!!result.win,delta,xp:num(result.xp),at:new Date().toISOString(),synced:false}})}
-function canSync(){return !!(client&&user&&!user.is_anonymous&&scope===user.id&&cloudHydrated&&!hydrating&&!accountSwitching)}
+function saveMainState(state){if(accountSwitching||!ownsProfile())return false;return write('vezdehot:lobby:v1:'+scope,{...state,...getProfile()})}
+function loadMainState(){const saved=read('vezdehot:lobby:v1:'+scope,read('vezdehot:main:'+scope,scope==='guest'?read(LEGACY,{}):{}));return {...saved,...getProfile()}}
+function recordResult(result){if(!result||!['durak','bunker','poker','mafia','monopoly'].includes(result.game))return {...getProfile(),ok:false};const id=String(result.id||crypto.randomUUID()).slice(0,100),delta=Math.max(-2000000,Math.min(2000000,Math.floor(Number(result.delta)||0)));const resultState=mutate({kind:'result',value:{id,game:result.game,win:!!result.win,delta,xp:num(result.xp),at:new Date().toISOString(),synced:false}});return {...resultState,ok:resultState.ok&&resultState.persisted}}
+function canSync(){return !!((ownsProfile()||handoffFlush)&&client&&user&&!user.is_anonymous&&scope===user.id&&cloudHydrated&&!hydrating&&!accountSwitching)}
 function queueSync(){clearTimeout(syncTimer);if(canSync()&&profile.dirty)syncTimer=setTimeout(sync,700)}
 function dbProfile(p,id){return {id,nickname:p.nick.length<2?p.nick+'!':p.nick,balance:p.balance,xp:p.xp,wins:p.wins,games:p.games,preferences:{avatar:p.avatar,durakPace:p.durakPace,reduceMotion:p.reduceMotion,bonusAt:p.bonusAt},updated_at:new Date().toISOString()}}
 function sync(){
@@ -67,10 +67,12 @@ function activate(session){
   activationFlight=performActivate(nextUser,next);return activationFlight;
 }
 async function performActivate(nextUser,next){
-  const epoch=++activationEpoch,changed=scope!==next;clearTimeout(syncTimer);write(PREFIX+scope,profile);
+  const request=++activationRequest,changed=scope!==next;clearTimeout(syncTimer);write(PREFIX+scope,profile);
+  if(changed&&window.VEZDEHOT_TAB_SESSION){await window.VEZDEHOT_TAB_SESSION.start(next,{beforeYield:flushBeforeYield,initial:!booted});if(request!==activationRequest)return}
+  const epoch=++activationEpoch;
   if(changed){
     if(booted){accountSwitching=true;document.dispatchEvent(new CustomEvent('vezdehot:accountchange',{detail:{from:scope,to:next}}))}
-    scope=next;profile=clean(read(PREFIX+scope,BASE));write(LEGACY,{...read('vezdehot:main:'+scope,{}),...profile,view:'lobby'});
+    scope=next;profile=clean(read(PREFIX+scope,BASE));
   }
   user=nextUser;hydrating=!!user;cloudHydrated=!user;hydrationOps=pendingOperations(scope);cloudState=user?'loading':'local';
   compatibility();emit();
@@ -99,19 +101,24 @@ function hasMiniAppData(){return !!(config.telegramMiniAppEnabled&&config.telegr
 function refreshTelegramProvider(){providers.telegram=!!config.telegramEnabled||hasMiniAppData()}
 async function checkProviders(){refreshTelegramProvider();if(!config.url)return;try{const r=await bounded(networkFetch(config.url+'/auth/v1/settings',{headers:{apikey:config.publishableKey}}));if(r.ok){const x=await bounded(r.json());providers.google=!!x.external?.google;refreshTelegramProvider()}}catch{}}
 async function init(){
+  try{if(window.VEZDEHOT_TAB_SESSION)await window.VEZDEHOT_TAB_SESSION.start(scope,{beforeYield:flushBeforeYield})}catch{cloudState='offline';authError='Эта вкладка не получила управление игрой.';return}
+  // Another tab may have changed the profile while this page was waiting for its lock.
+  if(scope==='guest'&&!stored(PREFIX+'guest'))write(PREFIX+'guest',clean(read(LEGACY,read('uniq_play_v1',BASE))));
+  profile=clean(read(PREFIX+scope,BASE));hydrationOps=pendingOperations(scope);
   compatibility();if(!window.supabase||!config.url){cloudState=scope==='guest'?'local':'offline';booted=true;resolveReady();return}
   try{
     client=window.supabase.createClient(config.url,config.publishableKey,{auth:{flowType:'pkce',persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},global:{fetch:networkFetch}});
     const params=new URLSearchParams(location.search);if(params.has('error'))authError='Вход отменён или не завершён. Гостевой прогресс сохранён.';
-    client.auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_IN'||event==='SIGNED_OUT'||event==='USER_UPDATED')setTimeout(()=>{activationFlight=activate(session)},0)});
-    const epoch=activationEpoch;const {data,error}=await bounded(client.auth.getSession());if(error)throw error;
-    if(epoch===activationEpoch)activationFlight=activate(data.session);
-    while(activationFlight){const pending=activationFlight;await pending;if(activationFlight===pending)break}
+    client.auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_IN'||event==='SIGNED_OUT'||event==='USER_UPDATED')setTimeout(()=>{if(!ownsProfile()&&booted)return;activationFlight=activate(session);activationFlight.catch(()=>{})},0)});
+    const epoch=activationEpoch,request=activationRequest;const {data,error}=await bounded(client.auth.getSession());if(error)throw error;
+    if(epoch===activationEpoch&&request===activationRequest)activationFlight=activate(data.session);
+    while(activationFlight){const pending=activationFlight;try{await pending}catch(error){if(error?.code==='SESSION_SUPERSEDED'&&activationFlight!==pending)continue;throw error}if(activationFlight===pending)break}
   }catch{cloudState='offline';authError='Не удалось связаться с сервисом входа. Можно продолжить гостем.'}
   finally{booted=true;resolveReady();checkProviders();emit()}
 }
 function account(){refreshTelegramProvider();const identities=user?.identities?.map(x=>x.provider)||[];if(user?.app_metadata?.telegram_id&&!identities.includes('custom:telegram'))identities.push('custom:telegram');return {user:user?{id:user.id,email:user.email||'',providers:identities}:null,scope,status:cloudState,error:authError,loading:hydrating,switching:accountSwitching,providers:{...providers},storagePersisted:!storageFailed}}
 async function login(provider,link=false){
+  if(!ownsProfile())throw new Error('Продолжи игру в активной вкладке.');
   if(accountSwitching||hydrating)throw new Error('Профиль загружается. Подожди немного.');
   if(!client)throw new Error('Нет соединения с сервисом входа. Попробуй позже.');
   refreshTelegramProvider();
@@ -131,8 +138,8 @@ async function login(provider,link=false){
   const result=await bounded(link?client.auth.linkIdentity({provider:p,options}):client.auth.signInWithOAuth({provider:p,options}));
   if(result.error)throw new Error('Вход не завершён. Попробуй ещё раз или продолжи гостем.');
 }
-async function signOut(){if(!client||!user||accountSwitching)return;const id=user.id;await sync();if(user?.id!==id||scope!==id)return;const {error}=await bounded(client.auth.signOut({scope:'local'}));if(error)throw new Error('Не удалось выйти. Проверь соединение и повтори.');await activate(null)}
-function canImportGuest(){return !!(user&&cloudHydrated&&!hydrating&&!accountSwitching&&profile.games===0&&profile.xp===0&&profile.wins===0&&profile.balance===BASE.balance&&!profile.history.length&&!read('vezdehot:guest-import:'+user.id,false)&&read(PREFIX+'guest',{}).games>0)}
+async function signOut(){if(!ownsProfile()||!client||!user||accountSwitching)return;const id=user.id;await sync();if(!ownsProfile()||user?.id!==id||scope!==id)return;const {error}=await bounded(client.auth.signOut({scope:'local'}));if(error)throw new Error('Не удалось выйти. Проверь соединение и повтори.');await activate(null)}
+function canImportGuest(){return !!(ownsProfile()&&user&&cloudHydrated&&!hydrating&&!accountSwitching&&profile.games===0&&profile.xp===0&&profile.wins===0&&profile.balance===BASE.balance&&!profile.history.length&&!read('vezdehot:guest-import:'+user.id,false)&&read(PREFIX+'guest',{}).games>0)}
 function importGuest(){
   if(!canImportGuest())return false;const guest=clean(read(PREFIX+'guest',BASE)),marker='vezdehot:guest-import:'+user.id;
   // The import marker is deliberately outside clean(): profile normalization cannot erase it.
@@ -141,6 +148,44 @@ function importGuest(){
   cloudState='local';compatibility();emit();queueSync();return true;
 }
 const names={durak:'Дурак',poker:'Покер',bunker:'Бункер',mafia:'Мафия',monopoly:'Монополия'};
+const recoveryNotices=new Map(),acknowledgedRecovery=new Set();
+function retryLocalProfile(){
+  if(!ownsProfile()&&!handoffFlush)return false;
+  for(const key of [...ephemeralKeys]){try{if(key===ACTIVE){const durable=JSON.parse(localStorage.getItem(ACTIVE));if(activePointerStale||durable&&durable!==scope){ephemeralKeys.delete(key);memoryStore.delete(key);continue}}localStorage.setItem(key,memoryStore.get(key));ephemeralKeys.delete(key)}catch{}}
+  storageFailed=ephemeralKeys.size>0;return !storageFailed;
+}
+async function flushBeforeYield(){
+  // Web Lock is still held, but gameplay permission has already been suspended.
+  handoffFlush=true;
+  try{
+    clearTimeout(syncTimer);await sync();retryLocalProfile();
+    if(ephemeralKeys.size||Object.keys(names).some(game=>window.VEZDEHOT_GAME_STORE?.status(game,scope).pending))throw new Error('Unsaved local progress');
+  }finally{handoffFlush=false}
+}
+function renderSaveNotice(game,id=scope){
+  const actual=window.VEZDEHOT_GAME_STORE?.status(game,id)||{status:'empty'},recovery=recoveryNotices.get(id+':'+game);
+  const status=recovery&&!['corrupt','unavailable'].includes(actual.status)?{...actual,status:'recovered',message:recovery}:actual,warning=(['corrupt','unavailable'].includes(status.status)||status.status==='recovered'&&!acknowledgedRecovery.has(id+':'+game))||storageFailed;
+  const title=status.status==='recovered'?'Партия восстановлена':status.status==='corrupt'?'Не удалось прочитать сохранение':'Не удалось сохранить прогресс';
+  const message=storageFailed?'Браузер не разрешил записать данные. Прогресс пока доступен в этой вкладке; не закрывай её до успешного сохранения.':status.message;
+  return `<aside class="vh-game-save" data-game-save="${esc(game)}" data-save-scope="${esc(id)}" data-status="${esc(status.status)}" role="status" aria-live="polite" ${warning?'':'hidden'}><span class="vh-game-save-mark" aria-hidden="true">${status.status==='recovered'?'↻':'!'}</span><div><strong>${title}</strong><p>${esc(message)}</p></div>${status.pending||storageFailed?'<button type="button" data-retry-game-save>Повторить сохранение</button>':status.status==='recovered'?'<button type="button" data-dismiss-game-save>Понятно</button>':''}</aside>`;
+}
+function refreshSaveNotices(){
+  document.querySelectorAll?.('[data-game-save]').forEach(node=>{if(node.dataset.saveScope===scope)node.outerHTML=renderSaveNotice(node.dataset.gameSave,scope)});
+}
+function bindSaveNotice(){refreshSaveNotices()}
+document.addEventListener('vezdehot:save-status',event=>{if(event.detail?.status==='recovered'){const key=event.detail.scope+':'+event.detail.game;recoveryNotices.set(key,event.detail.message);acknowledgedRecovery.delete(key)}refreshSaveNotices()});
+document.addEventListener('click',event=>{
+  const button=event.target?.closest?.('[data-retry-game-save], [data-dismiss-game-save]'),notice=button?.closest('[data-game-save]');
+  if(!notice||notice.dataset.saveScope!==scope||!ownsProfile())return;
+  if(button.hasAttribute('data-dismiss-game-save')){const key=scope+':'+notice.dataset.gameSave;recoveryNotices.delete(key);acknowledgedRecovery.add(key);refreshSaveNotices();return}
+  retryLocalProfile();window.VEZDEHOT_GAME_STORE?.retry(notice.dataset.gameSave,scope);refreshSaveNotices();refreshAccountProviders();
+});
+document.addEventListener('vezdehot:sessionpause',event=>{
+  if(event.detail?.reason==='account-change'){activePointerStale=true;ephemeralKeys.delete(ACTIVE);memoryStore.delete(ACTIVE)}
+  clearTimeout(syncTimer);retryLocalProfile();
+  for(const game of Object.keys(names))if(window.VEZDEHOT_GAME_STORE?.status(game,scope).pending)window.VEZDEHOT_GAME_STORE.retry(game,scope);
+});
+document.addEventListener('vezdehot:sessionlost',()=>{handoffFlush=false;clearTimeout(syncTimer);activationEpoch++;activeDialog?.close(false)});
 function toast(message){let e=document.getElementById('vh-toast');if(!e){e=document.createElement('div');e.id='vh-toast';e.className='vh-toast';e.setAttribute('role','status');document.body.appendChild(e)}e.textContent=message;e.classList.add('show');clearTimeout(e._timer);e._timer=setTimeout(()=>e.classList.remove('show'),3500)}
 const gameMarks={durak:'♠',poker:'♦',bunker:'◈',mafia:'☾',monopoly:'▦'};
 const avatarNames=['Искра','Кристалл','Пика','Цветок','Треугольник','Луна','Солнце','Ромб'];
@@ -249,7 +294,7 @@ function accountMessage(a){if(authError)return authError;if(a.user)return 'Го�
 function refreshAccountProviders(){const modal=document.querySelector('#vh-account');if(!modal)return;const a=account(),state=modal.querySelector('[data-save-state]');if(state){state.dataset.status=!a.storagePersisted?'warning':a.loading?'loading':a.status;modal.querySelector('[data-save-state-copy]').textContent=savingMessage(a);modal.querySelector('[data-profile-balance]').innerHTML=prettyNumber(profile.balance)+' <em>V</em>';const retry=modal.querySelector('[data-sync-profile]');retry.hidden=!a.user||a.loading||a.switching||a.status!=='offline';retry.disabled=a.loading||a.switching;modal.querySelector('[data-save-profile]').disabled=a.loading||a.switching;modal.querySelector('[data-account-exit]').disabled=a.loading||a.switching}const message=modal.querySelector('.vh-auth-message');if(message)message.textContent=accountMessage(a);modal.querySelectorAll('[data-provider]').forEach(b=>{const v=b.dataset.provider,p=providerPresentation(v,a);b.disabled=p.disabled;b.innerHTML=`<span>${v==='google'?'G':'↗'}</span>${p.text}${p.hint?'<small>'+p.hint+'</small>':''}`})}
 document.addEventListener('vezdehot:accountchange',()=>activeDialog?.close(false));
 document.addEventListener('vezdehot:telegramready',()=>{refreshTelegramProvider();refreshAccountProviders();emit()});
-window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,importGuest,canImportGuest,toast,avatars};
-window.addEventListener('online',()=>{if(user&&!cloudHydrated&&!hydrating&&!accountSwitching)activationFlight=activate({user});else queueSync()});document.addEventListener('visibilitychange',()=>{if(document.hidden&&profile.dirty)sync()});window.addEventListener('storage',e=>{if(!hydrating&&!accountSwitching&&e.key===PREFIX+scope){const latest=clean(read(e.key));if(latest.revision>profile.revision){profile=latest;compatibility();emit()}}});
+window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,toast,avatars};
+window.addEventListener('online',()=>{if(!ownsProfile())return;if(user&&!cloudHydrated&&!hydrating&&!accountSwitching){activationFlight=activate({user});activationFlight.catch(()=>{})}else queueSync()});document.addEventListener('visibilitychange',()=>{if(document.hidden&&profile.dirty)sync()});window.addEventListener('storage',e=>{if(ownsProfile()&&!hydrating&&!accountSwitching&&e.key===PREFIX+scope){const latest=clean(read(e.key));if(latest.revision>profile.revision){profile=latest;emit()}}});
 init();
 })();

@@ -181,6 +181,26 @@ test('an interrupted result offers retry without falsely claiming saved progress
   assert.match(output, /data-retry-settlement/); assert.ok(!output.includes('data-replay')); assert.ok(!output.includes('уже сохранён'));
 });
 
+test('shared recovery notice is rendered and bound on the setup screen and during a game', () => {
+  const rendered = [], bound = [];
+  context.window.VEZDEHOT.renderSaveNotice = (game, scope) => { rendered.push([game, scope]); return '<aside role="status">Восстановлена резервная копия</aside>'; };
+  context.window.VEZDEHOT.bindSaveNotice = (container, game, scope) => bound.push([container, game, scope]);
+  fixture(); run('render()'); assert.match(app.innerHTML, /role="status">Восстановлена резервная копия/);
+  run('g=null;render()'); assert.match(app.innerHTML, /Восстановлена резервная копия/);
+  assert.deepEqual(rendered, [['mafia', 'guest'], ['mafia', 'guest']]);
+  assert.ok(bound.length === 2 && bound.every(item => item[0] === app && item[1] === 'mafia' && item[2] === 'guest'));
+  delete context.window.VEZDEHOT.renderSaveNotice; delete context.window.VEZDEHOT.bindSaveNotice;
+});
+
+test('stale UI click handlers cannot advance a game after tab ownership is lost', () => {
+  const g = fixture(), target = { dataset: { target: '1' } }, confirm = {}, pause = {};
+  groups.set('[data-target]', [target]); groups.set('[data-night-confirm]', [confirm]); groups.set('[data-pause]', [pause]);
+  run('bind()'); context.window.VEZDEHOT_TAB_SESSION = { canWrite: () => false };
+  target.onclick(); confirm.onclick(); pause.onclick();
+  assert.equal(g.nightTarget, null); assert.equal(g.phase, 'night'); assert.equal(context.paused, false);
+  delete context.window.VEZDEHOT_TAB_SESSION;
+});
+
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.
 new Function(html.match(/<script>\s*([\s\S]*?)<\/script>/)[1]);
 console.log(`${count} Mafia UI checks passed`);
