@@ -431,3 +431,40 @@ test('walkthrough copy remains literal text and all four tabs work from the keyb
   assert.equal(h.document.activeElement,button(h,'[data-guide-tab="walkthrough"]'));assert.match(visibleText(h.dialog),/<img src=x/);assert.equal(h.dialog.querySelector('img,script'),null);
   const walk=button(h,'[data-guide-tab="walkthrough"]');walk.dispatchEvent({type:'keydown',key:'ArrowRight'});assert.equal(h.document.activeElement,now);assert.deepEqual(h.effects,[]);
 });
+
+test('walkthrough roster renders only supplied public facts and updates with each decision',()=>{
+  const h=harness(),f=walkthroughFixture(),base=f.adapter.view;
+  f.adapter.view=state=>({...base(state),groups:[],people:[
+    {name:'Игрок',alive:true,self:true,badge:'Комиссар',detail:'Только тебе: собственная роль.'},
+    {name:'Лаки',alive:state.step===1,badge:state.step===1?'Роль скрыта':'Мирный',detail:state.step===1?'Проверки пока нет.':'Роль раскрыта после голосования.',get role(){throw Error('Private role must never be read')},get hand(){throw Error('Private cards must never be read')}},
+    {name:'Некорректный участник',alive:'yes'},null
+  ]});
+  h.api.open(fixture({game:'mafia',walkthrough:f.adapter,initialTab:'walkthrough'}));
+  assert.equal(h.dialog.querySelectorAll('.vh-walk-person').length,2);assert.equal(h.dialog.querySelector('[aria-label="Участники учебной партии"]').tagName,'SECTION');
+  assert.match(visibleText(h.dialog),/Игрок · ты/);assert.match(visibleText(h.dialog),/Роль скрыта/);assert.doesNotMatch(visibleText(h.dialog),/Некорректный/);
+  button(h,'[data-walk-action="move"]').click();assert.equal(h.dialog.querySelectorAll('[data-alive="false"]').length,1);assert.match(visibleText(h.dialog),/Мирный/);assert.doesNotMatch(visibleText(h.dialog),/Роль скрыта/);assert.deepEqual(h.effects,[]);
+});
+
+test('walkthrough roster text cannot inject markup or expose unsupported object fields',()=>{
+  const h=harness(),f=walkthroughFixture(),base=f.adapter.view,attack='<img src=x onerror="bad()">';
+  f.adapter.view=state=>({...base(state),people:[{name:attack,alive:false,badge:attack,detail:attack,self:true,secret:'NEVER_RENDER_THIS_ROLE'}]});
+  h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));
+  assert.equal(h.dialog.querySelector('img,script'),null);assert.match(visibleText(h.dialog),/<img src=x/);assert.doesNotMatch(visibleText(h.dialog),/NEVER_RENDER_THIS_ROLE/);
+  assert.equal(h.dialog.querySelector('.vh-walk-person-avatar').getAttribute('aria-hidden'),'true');assert.deepEqual(h.effects,[]);
+});
+
+test('walkthrough target selection remains separate from confirmation and exposes pressed state',()=>{
+  const h=harness(),f=walkthroughFixture(),base=f.adapter.view;
+  f.adapter.view=state=>({...base(state),choices:[{id:'select',label:'Выбрать участника',selected:state.target===1},{id:'confirm',label:'Подтвердить',disabled:state.target!==1}]});
+  f.adapter.act=(state,id)=>id==='select'?{...state,target:1}:{...state,step:3};
+  h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));const old=button(h,'[data-walk-action="select"]');assert.equal(old.getAttribute('aria-pressed'),'false');
+  assert.equal(button(h,'[data-walk-action="confirm"]').disabled,true);old.click();assert.equal(button(h,'[data-walk-action="select"]').getAttribute('aria-pressed'),'true');assert.match(visibleText(h.dialog),/Этап 1/);
+  const confirm=button(h,'[data-walk-action="confirm"]');assert.equal(confirm.getAttribute('aria-pressed'),null);assert.equal(confirm.disabled,false);confirm.click();assert.match(visibleText(h.dialog),/Разбор завершён/);old.onclick();assert.match(visibleText(h.dialog),/Разбор завершён/);assert.deepEqual(h.effects,[]);
+});
+
+test('an unplayed defense keeps its table position without reading or suggesting a hidden card',()=>{
+  const h=harness(),f=walkthroughFixture(),base=f.adapter.view;
+  f.adapter.view=state=>({...base(state),groups:[{label:'Защита',cards:[{rank:'7',suit:'♠'},{placeholder:true,label:'Ожидает защиты',get rank(){throw Error('No card has been played')},get suit(){throw Error('No card has been played')}}]}]});
+  h.api.open(fixture({walkthrough:f.adapter,initialTab:'walkthrough'}));
+  assert.equal(h.dialog.querySelectorAll('.vh-walk-card').length,2);assert.equal(h.dialog.querySelectorAll('.vh-walk-card-slot').length,1);assert.ok(h.dialog.querySelector('[aria-label="Ожидает защиты"]'));assert.equal(h.dialog.querySelector('[aria-label="Закрытая карта"]'),null);assert.deepEqual(h.effects,[]);
+});
