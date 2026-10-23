@@ -20,7 +20,7 @@ const context = vm.createContext({
       put: async (key, response) => entries.set(key, response.clone()),
       match: async key => entries.get(key)?.clone()
     }),
-    keys: async () => ['vezdehot-v5', 'vezdehot-v7', 'unrelated-app'],
+    keys: async () => ['vezdehot-v5', 'vezdehot-v7', vm.runInContext('CACHE', context), 'unrelated-app'],
     delete: async key => deleted.push(key)
   },
   fetch: (...args) => { fetches++; return network(...args); }
@@ -121,7 +121,7 @@ async function dispatch(url, mode = 'navigate', headers = {}) {
     let pending;
     listeners.activate({waitUntil(value) { pending = value; }});
     await pending;
-    assert.deepEqual(deleted, ['vezdehot-v5']);
+    assert.deepEqual(deleted, ['vezdehot-v5', 'vezdehot-v7']);
   });
   console.log(`PASS ${checks.length} service-worker cache checks`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
