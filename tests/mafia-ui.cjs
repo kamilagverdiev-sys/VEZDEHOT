@@ -11,7 +11,7 @@ const profile = { nick: 'Игрок', balance: 10000, reduceMotion: false };
 const context = {
   console, Date, Math,
   window: { innerWidth: 360, matchMedia: () => ({ matches: false }), VEZDEHOT: {
-    getProfile: () => ({ ...profile }), scopeKey: () => 'guest',
+    getProfile: () => ({ ...profile }), updateProfile: patch => Object.assign(profile, patch), scopeKey: () => 'guest',
     openAccount() { accountOpens++; }, openHistory() { historyOpens++; }
   } },
   document: {
@@ -25,7 +25,7 @@ const context = {
 vm.createContext(context); vm.runInContext(engine + '\n' + ui, context);
 const run = text => vm.runInContext(text, context);
 function fixture(role = 'detective') {
-  selectors.clear(); groups.clear();
+  selectors.clear(); groups.clear(); profile.balance = 10000;
   run('syncProfile();g=newGame();paused=false;uiDetails={};uiPhaseKey=null;uiGameId=null');
   const roles = ['detective', 'mafia', 'mafia', 'doctor', 'civilian', 'civilian', 'civilian'];
   const at = roles.indexOf(role); [roles[0], roles[at]] = [roles[at], roles[0]];
@@ -101,6 +101,57 @@ test('untrusted player names are escaped in dossier attributes and result messag
   assert.ok(!run('playerGrid()').includes('<img'));
   g.over = true; g.resultReason = '<script>alert(1)</script>'; g.win = false;
   assert.ok(!run('resultPanel()').includes('<script>'));
+});
+
+test('replay opens a new first night with the same difficulty and charges the entry once', () => {
+  const old = fixture('civilian'); old.over = true; old.phase = 'result'; old.diff = 'hard';
+  const replay = {}; groups.set('[data-replay]', [replay]); run('bind()');
+  replay.onclick();
+  assert.notEqual(context.g.id, old.id); assert.equal(context.g.phase, 'night');
+  assert.equal(context.g.diff, 'hard'); assert.equal(context.g.over, false);
+  assert.equal(profile.balance, 9900); assert.equal(context.paused, false);
+  const newId = context.g.id; replay.onclick();
+  assert.equal(context.g.id, newId); assert.equal(profile.balance, 9900);
+  assert.equal(JSON.parse(writes.get('vezdehot_mafia_v3_guest')).id, newId);
+});
+test('insufficient replay balance preserves the completed game and shows an actionable error', () => {
+  const old = fixture(); old.over = true; old.phase = 'result'; old.winningTeam = 'town'; old.win = true; old.resultReason = 'Город победил.';
+  profile.balance = 50; run('replay()');
+  assert.equal(context.g.id, old.id); assert.equal(profile.balance, 50);
+  assert.match(app.innerHTML, /role="alert"/); assert.match(app.innerHTML, /Для входа нужно 100 V/);
+  assert.match(app.innerHTML, /Результат партии/);
+});
+test('result explains team victory, eliminated-player credit and net entry accounting', () => {
+  const g = fixture('civilian'); g.over = true; g.phase = 'result'; g.winningTeam = 'town'; g.win = true;
+  g.players.forEach(p => { if (p.role === 'mafia' || p.id === 0) p.alive = false; });
+  g.resultReason = 'Город нашёл всех участников мафии.';
+  const output = run('resultPanel()');
+  assert.match(output, /Ты победил вместе с командой/);
+  assert.match(output, /Ты выбыл, но результат определяется победой всей команды/);
+  assert.match(output, /Мафия 0 · Город 4/);
+  assert.match(output, /−100 V/); assert.match(output, /250 V/); assert.match(output, /\+150 V/);
+  assert.match(output, /data-replay>Сыграть ещё · 100 V/); assert.match(output, /data-new>Изменить настройки/);
+});
+test('mafia parity and draw results explain the actual ending condition', () => {
+  const g = fixture('civilian'); g.over = true; g.phase = 'result'; g.win = false; g.winningTeam = 'mafia';
+  g.players.forEach(p => { p.alive = p.role === 'mafia' || [0, 3].includes(p.id); });
+  let output = run('resultPanel()');
+  assert.match(output, /Твоя команда проиграла/); assert.match(output, /Мафии осталось 2, остальных жителей — 2/);
+  g.draw = true; g.winningTeam = 'draw'; g.round = 25;
+  output = run('resultPanel()'); assert.match(output, /Ничья — ставка возвращена/);
+  assert.match(output, /За 25 раундов/); assert.match(output, /<span>Итог<\/span><b>0 V/);
+});
+test('suspicions remain available while voting and no hidden team counts appear before the end', () => {
+  const g = fixture('civilian'); g.phase = 'vote'; g.nightText = 'Все жители встретили рассвет.';
+  g.statements = [{ actor: 1, target: 2, text: 'Предлагает присмотреться к Рэю.' }];
+  assert.match(run('logs()'), /Версии жителей/); assert.match(run('logs()'), /Предлагает присмотреться к Рэю/);
+  const panel = run('phasePanel()'); assert.match(panel, /Версия бота — подозрение, а не раскрытая роль/);
+  assert.match(panel, /data-open-statements/); assert.ok(!panel.includes('Мафии осталось'));
+});
+test('chronicle shows all retained events and identifies reverse chronology', () => {
+  const g = fixture(); g.log = Array.from({ length: 40 }, (_, i) => 'Событие ' + (40 - i));
+  const output = run('logs()'); assert.match(output, /40 · новые сверху/);
+  assert.match(output, /Событие 1<\/li>/); assert.match(output, /Событие 40<\/li>/);
 });
 
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.

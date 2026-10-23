@@ -1,7 +1,7 @@
-const CACHE = 'vezdehot-v8';
+const CACHE = 'vezdehot-v9';
 const ASSETS = [
   './', './index.html', './durak.css', './bunker.css', './lobby.css', './platform.css',
-  './poker.html', './mafia.html', './monopoly.html', './manifest.webmanifest',
+  './poker.html', './poker-equity.js', './mafia.html', './monopoly.html', './manifest.webmanifest',
   './auth-config.js', './platform.js', './telegram.js', './vendor/supabase-2.118.0.js'
 ];
 const SCOPE = new URL(self.registration.scope);
