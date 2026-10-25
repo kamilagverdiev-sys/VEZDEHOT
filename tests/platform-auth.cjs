@@ -233,6 +233,22 @@ test('Google uses the current production origin and cannot start concurrent PKCE
   assert.deepEqual(h.navigation,['https://project.supabase.co/auth/v1/authorize']);assert.equal(h.api.account().authPending,false);
 });
 
+test('OAuth stays on the current page when its profile cannot survive a redirect',async t=>{
+  const options={blockWrite:true,fetch:async()=>({ok:true,json:async()=>({external:{google:true}})})},h=harness(options);t.after(()=>h.close());await h.api.ready;await tick();
+  h.api.updateProfile({nick:'Unsaved guest',balance:9876});
+  await assert.rejects(()=>h.api.login('google'),/Разреши хранилище сайта/);
+  assert.equal(h.oauthCalls.length,0);assert.equal(h.navigation.length,0);assert.equal(h.api.account().authPending,false);assert.equal(h.api.getProfile().balance,9876);
+  options.blockWrite=false;await h.api.login('google');
+  assert.equal(h.oauthCalls.length,1);assert.equal(JSON.parse(h.store.get('vezdehot:profile:guest')).balance,9876);assert.equal(h.api.account().storagePersisted,true);
+});
+
+test('the account panel gives a stable account reference for comparing devices',async t=>{
+  const h=harness({session:session(A),profiles:{[A]:profile('Signed player')}});t.after(()=>h.close());await h.api.ready;
+  const message={textContent:''};h.context.document.querySelector=selector=>selector==='#vh-account'?{querySelector:key=>key==='.vh-auth-message'?message:null,querySelectorAll:()=>[]}:null;
+  h.event('document','vezdehot:telegramready');
+  assert.match(message.textContent,/ID аккаунта: aaaaaaaa/);assert.match(message.textContent,/тем же способом/);assert.match(message.textContent,/Гостевой прогресс хранится отдельно/);assert.doesNotMatch(message.textContent,/-aaaa-/);
+});
+
 test('a late OAuth response cannot navigate after the active tab is lost',async t=>{
   const pending=deferred(),h=harness({oauthResponse:pending.promise,fetch:async()=>({ok:true,json:async()=>({external:{google:true}})})});t.after(()=>h.close());await h.api.ready;await tick();
   const first=h.api.login('google');h.context.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};
@@ -266,31 +282,34 @@ test('callback shows OAuth failure ahead of an older signed-in session and clear
   assert.equal(nodes.title.textContent,'Вход не завершён');assert.match(nodes.status.textContent,/Ранее открытый аккаунт/);assert.equal(replaced[0][2],'/auth-callback.html');
 });
 
-test('server table uses only configured endpoint and keeps the access token inside transport',async t=>{
-  const h=harness({config:{serverDurakUrl:'https://project.supabase.co/functions/v1/server-durak'},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed player')},fetch:async input=>String(input).endsWith('/server-durak')?{ok:true,status:200,json:async()=>({state:null,revision:0})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
-  const result=await h.api.serverDurakRequest({op:'load'}),request=h.requests.find(x=>String(x.input).endsWith('/server-durak'));
+for(const game of ['durak','poker']){
+const configKey=game==='poker'?'serverPokerUrl':'serverDurakUrl',method=game==='poker'?'serverPokerRequest':'serverDurakRequest',path='/server-'+game;
+test('server '+game+' uses only configured endpoint and keeps the access token inside transport',async t=>{
+  const h=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed player')},fetch:async input=>String(input).endsWith(path)?{ok:true,status:200,json:async()=>({state:null,revision:0})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
+  const result=await h.api[method]({op:'load'}),request=h.requests.find(x=>String(x.input).endsWith(path));
   assert.deepEqual(JSON.parse(JSON.stringify(result)),{ok:true,status:200,data:{state:null,revision:0}});assert.equal(request.opts.headers.Authorization,'Bearer fixture-token');assert.equal(request.opts.headers.apikey,'public');assert.deepEqual(JSON.parse(request.opts.body),{op:'load'});
   assert.equal(JSON.stringify([...h.store]).includes('fixture-token'),false);assert.equal(JSON.stringify(h.api.account()).includes('fixture-token'),false);
 });
 
-test('server table rejects guests and a configured foreign endpoint without making requests',async t=>{
-  const guest=harness({config:{serverDurakUrl:'https://project.supabase.co/functions/v1/server-durak'}});t.after(()=>guest.close());await guest.api.ready;await assert.rejects(()=>guest.api.serverDurakRequest({op:'load'}),/войти|войди/);assert.equal(guest.requests.some(x=>String(x.input).endsWith('/server-durak')),false);
-  const foreign=harness({config:{serverDurakUrl:'https://foreign.test/functions/v1/server-durak'},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed')}});t.after(()=>foreign.close());await foreign.api.ready;await assert.rejects(()=>foreign.api.serverDurakRequest({op:'load'}),/недоступен/);assert.equal(foreign.requests.some(x=>String(x.input).includes('foreign.test')),false);
+test('server '+game+' rejects guests and a configured foreign endpoint without making requests',async t=>{
+  const guest=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path}});t.after(()=>guest.close());await guest.api.ready;await assert.rejects(()=>guest.api[method]({op:'load'}),/войти|войди/);assert.equal(guest.requests.some(x=>String(x.input).endsWith(path)),false);
+  const foreign=harness({config:{[configKey]:'https://foreign.test/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed')}});t.after(()=>foreign.close());await foreign.api.ready;await assert.rejects(()=>foreign.api[method]({op:'load'}),/недоступен/);assert.equal(foreign.requests.some(x=>String(x.input).includes('foreign.test')),false);
 });
 
-test('server table rejects a changed auth session before sending a bearer token',async t=>{
-  const opts={config:{serverDurakUrl:'https://project.supabase.co/functions/v1/server-durak'},session:{...session(A),access_token:'fixture-A'},profiles:{[A]:profile('A')}};
+test('server '+game+' rejects a changed auth session before sending a bearer token',async t=>{
+  const opts={config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-A'},profiles:{[A]:profile('A')}};
   const h=harness(opts);t.after(()=>h.close());await h.api.ready;opts.getSession=async()=>({data:{session:{...session(B),access_token:'fixture-B'}}});
-  await assert.rejects(()=>h.api.serverDurakRequest({op:'load'}),/Сессия входа истекла/);assert.equal(h.requests.some(x=>String(x.input).endsWith('/server-durak')),false);
+  await assert.rejects(()=>h.api[method]({op:'load'}),/Сессия входа истекла/);assert.equal(h.requests.some(x=>String(x.input).endsWith(path)),false);
 });
 
-test('server table drops a late response after tab ownership changes',async t=>{
-  const pending=deferred(),h=harness({config:{serverDurakUrl:'https://project.supabase.co/functions/v1/server-durak'},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('A')},fetch:async input=>String(input).endsWith('/server-durak')?pending.promise:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
-  const response=h.api.serverDurakRequest({op:'load'});await tick();h.context.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};pending.resolve({ok:true,status:200,json:async()=>({state:{private:'old account'}})});
+test('server '+game+' drops a late response after tab ownership changes',async t=>{
+  const pending=deferred(),h=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('A')},fetch:async input=>String(input).endsWith(path)?pending.promise:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
+  const response=h.api[method]({op:'load'});await tick();h.context.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};pending.resolve({ok:true,status:200,json:async()=>({state:{private:'old account'}})});
   await assert.rejects(()=>response,error=>error.code==='STALE_ACCOUNT');
 });
 
-test('server table preserves structured server errors for the caller',async t=>{
-  const h=harness({config:{serverDurakUrl:'https://project.supabase.co/functions/v1/server-durak'},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('A')},fetch:async input=>String(input).endsWith('/server-durak')?{ok:false,status:409,json:async()=>({error:'conflict',revision:9})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
-  const response=await h.api.serverDurakRequest({op:'action'});assert.equal(response.ok,false);assert.equal(response.status,409);assert.equal(response.data.error,'conflict');assert.equal(response.data.revision,9);
+test('server '+game+' preserves structured server errors for the caller',async t=>{
+  const h=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('A')},fetch:async input=>String(input).endsWith(path)?{ok:false,status:409,json:async()=>({error:'conflict',revision:9})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
+  const response=await h.api[method]({op:'action'});assert.equal(response.ok,false);assert.equal(response.status,409);assert.equal(response.data.error,'conflict');assert.equal(response.data.revision,9);
 });
+}

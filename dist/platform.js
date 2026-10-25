@@ -221,7 +221,10 @@ async function login(provider,link=false){
     await activate(result.data.session);return;
   }
   if(link&&(!user||!config.manualLinkingEnabled))throw new Error('Подключение второго способа входа ещё не включено.');
-  write(PREFIX+scope,profile);if(user)await sync();requireCurrent();
+  // OAuth leaves this page. A memory-only fallback cannot preserve either the
+  // unsaved guest profile or the PKCE verifier through that redirect.
+  if(!compatibility())throw new Error('Браузер не разрешил сохранить данные для входа. Разреши хранилище сайта или освободи место, затем повтори. Текущая игра остаётся открытой.');
+  if(user)await sync();requireCurrent();
   const options={redirectTo:location.origin+'/auth-callback.html',skipBrowserRedirect:true},p=provider==='telegram'?config.telegramProvider:'google';
   const result=await bounded(link?client.auth.linkIdentity({provider:p,options}):client.auth.signInWithOAuth({provider:p,options}));
   requireCurrent();
@@ -230,8 +233,9 @@ async function login(provider,link=false){
   }finally{authPending=false;emit()}
 }
 async function signOut(){if(!ownsProfile()||!client||!user||accountSwitching)return;const id=user.id;await sync();if(!ownsProfile()||user?.id!==id||scope!==id)return;const {error}=await bounded(client.auth.signOut({scope:'local'}));if(error)throw new Error('Не удалось выйти. Проверь соединение и повтори.');await activate(null)}
-async function serverDurakRequest(body){
-  const endpoint=config.serverDurakUrl,expected=typeof config.url==='string'?config.url.replace(/\/$/,'')+'/functions/v1/server-durak':'';
+async function serverGameRequest(game,body){
+  // Only these two fixed routes can receive the current user's bearer token.
+  const endpoint=config[game==='poker'?'serverPokerUrl':'serverDurakUrl'],expected=typeof config.url==='string'?config.url.replace(/\/$/,'')+'/functions/v1/server-'+game:'';
   if(!endpoint||endpoint!==expected)throw new Error('Серверный стол пока недоступен.');
   if(!client||!user||user.is_anonymous||scope!==user.id||hydrating||accountSwitching||authPending||!ownsProfile())throw new Error('Для серверного стола войди в аккаунт в активной вкладке.');
   let encoded;try{if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();encoded=JSON.stringify(body);if(encoded.length>16384)throw new Error()}catch{throw new Error('Не удалось подготовить действие стола.')}
@@ -247,6 +251,8 @@ async function serverDurakRequest(body){
     return {ok:response.ok,status:response.status,data};
   }catch(error){if(error?.code==='STALE_ACCOUNT')throw error;requireCurrent();if(error?.message==='AUTH_REQUIRED')throw new Error('Сессия входа истекла. Войди в аккаунт снова.');throw new Error('Нет ответа от сервера. Повтори действие при стабильном соединении.')}
 }
+function serverDurakRequest(body){return serverGameRequest('durak',body)}
+function serverPokerRequest(body){return serverGameRequest('poker',body)}
 function canImportGuest(){
   const eligible=!!(gameplayWritable()&&user&&cloudHydrated&&!hydrating&&profile.games===0&&profile.xp===0&&profile.wins===0&&profile.balance===BASE.balance&&!profile.history.length&&!read('vezdehot:guest-import:'+user.id,false)&&read(PREFIX+'guest',{}).games>0);
   if(!eligible||!checkpointsEnabled)return eligible;
@@ -451,11 +457,11 @@ async function checkpointClick(event){
 document.addEventListener('click',checkpointClick);
 document.addEventListener('DOMContentLoaded',refreshCheckpointUI);
 function savingMessage(a){if(!a.storagePersisted)return 'Браузер не разрешил сохранить данные на устройстве. Прогресс в этой вкладке может пропасть после её закрытия.';if(checkpointsEnabled&&a.scope!=='guest')return checkpointPresentation().text;if(!a.user)return 'Гостевой прогресс сохранён на этом устройстве.';if(a.loading)return 'Загружаем твой облачный профиль…';if(a.status==='syncing')return 'Сохраняем изменения в облаке…';if(a.status==='saved')return 'Профиль синхронизирован с облаком. Партия сохраняется на этом устройстве.';if(a.status==='offline')return 'Нет связи с облаком. Изменения сохранены на устройстве; можно повторить синхронизацию.';return 'Изменения сохранены на устройстве. Синхронизация с облаком ожидает отправки.'}
-function accountMessage(a){if(authError)return authError;if(a.user)return 'Гостевой прогресс и прогресс аккаунта хранятся отдельно.';if(config.telegramMiniAppEnabled&&!hasMiniAppData()&&!config.telegramEnabled)return 'Вход через Telegram подтверждается в игре внутри бота. Гостевой прогресс остаётся отдельно.';return a.providers.google||a.providers.telegram?'Гостевые результаты остаются отдельно от аккаунта.':'Социальный вход скоро появится. Гостевой режим уже работает.'}
+function accountMessage(a){if(authError)return authError;if(a.user)return 'ID аккаунта: '+a.user.id.slice(0,8)+'. На другом устройстве войди тем же способом и сверь этот ID. Гостевой прогресс хранится отдельно.';if(config.telegramMiniAppEnabled&&!hasMiniAppData()&&!config.telegramEnabled)return 'Вход через Telegram подтверждается в игре внутри бота. Гостевой прогресс остаётся отдельно.';return a.providers.google||a.providers.telegram?'Гостевые результаты остаются отдельно от аккаунта.':'Социальный вход скоро появится. Гостевой режим уже работает.'}
 function refreshAccountProviders(){refreshCheckpointUI();const modal=document.querySelector('#vh-account');if(!modal)return;const oldCard=modal.querySelector('[data-checkpoint-card]');if(oldCard)oldCard.outerHTML=checkpointCard();const a=account(),state=modal.querySelector('[data-save-state]');if(state){state.hidden=checkpointsEnabled&&!!a.user&&a.storagePersisted;state.dataset.status=!a.storagePersisted?'warning':a.loading?'loading':a.status;modal.querySelector('[data-save-state-copy]').textContent=savingMessage(a);modal.querySelector('[data-profile-balance]').innerHTML=prettyNumber(profile.balance)+' <em>V</em>';const retry=modal.querySelector('[data-sync-profile]');retry.hidden=!a.user||a.loading||a.switching||a.status!=='offline';retry.disabled=a.loading||a.switching;modal.querySelector('[data-save-profile]').disabled=a.loading||a.switching||!gameplayWritable();modal.querySelector('[data-account-exit]').disabled=a.loading||a.switching}const message=modal.querySelector('.vh-auth-message');if(message)message.textContent=accountMessage(a);modal.querySelectorAll('[data-provider]').forEach(b=>{const v=b.dataset.provider,p=providerPresentation(v,a);b.disabled=p.disabled;b.innerHTML=`<span>${v==='google'?'G':'↗'}</span>${p.text}${p.hint?'<small>'+p.hint+'</small>':''}`})}
 document.addEventListener('vezdehot:accountchange',()=>activeDialog?.close(false));
 document.addEventListener('vezdehot:telegramready',()=>{refreshTelegramProvider();refreshAccountProviders();emit()});
-window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,serverDurakRequest,toast,avatars};
+window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,serverDurakRequest,serverPokerRequest,toast,avatars};
 window.addEventListener('online',()=>{if(!ownsProfile())return;if(checkpointsEnabled){if(user&&!accountSwitching)sync({pull:true});return}if(user&&!cloudHydrated&&!hydrating&&!accountSwitching){activationFlight=activate({user});activationFlight.catch(()=>{})}else queueSync()});
 document.addEventListener('visibilitychange',()=>{if(checkpointsEnabled){if(ownsProfile()&&checkpoint&&!accountSwitching)sync({pull:!document.hidden});return}if(document.hidden&&profile.dirty)sync()});
 document.addEventListener('vezdehot:sessionactive',()=>{if(checkpointsEnabled&&booted&&checkpoint&&!accountSwitching)sync({pull:true})});
