@@ -35,6 +35,8 @@ Callback из карточки провайдера в Supabase должен с�
 
 Для завершения настройки владелец вводит Client Secret непосредственно на [странице Google-провайдера Supabase](https://supabase.com/dashboard/project/cyzbraifdkrqicdsbuwe/auth/providers?provider=Google). Присылать секрет в чат или добавлять его в Git не нужно. На момент проверки подключённый Supabase connector не предоставлял операции изменения Auth configuration; сам факт доступа к таблицам не даёт Google OAuth credentials.
 
+Дополнительно проверены проекты CRM/FORMA. Production CRM использует отдельный Supabase `znoafaphmqtlwyuskhkb`; доступ к его управлению через текущий connector отклонён. В репозитории есть компонент Google OAuth, который проверяет доступность провайдера, но наличие компонента не подтверждает работающую конфигурацию. В metadata переменных Vercel нет Google OAuth credentials, значения секретов не экспортировались. Настройка CRM не переносилась в VEZDEHOT. Панель Auth VEZDEHOT открывается в облачном браузере, но требует отдельного входа в Supabase.
+
 ## Telegram Mini App: вход внутри бота
 
 `VesdehotBot` открывает игру внутри Telegram. При наличии `Telegram.WebApp.initData` клиент отправляет **только подписанную строку** в `https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/telegram-auth`. Edge Function проверяет Ed25519-подпись Telegram, bot ID `8412086640` и время данных, сопоставляет проверенный Telegram ID с Supabase user ID и возвращает одноразовый `token_hash`. Клиент завершает вход через `auth.verifyOtp({token_hash, type: 'magiclink'})`. `initDataUnsafe` не является доказательством личности и не используется.

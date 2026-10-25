@@ -1,0 +1,10 @@
+/* A sideways gesture scrolls a large hand; lifting a card starts a table drag. */
+[data-card-drag] .dt-hand-card:not(:disabled),[data-card-drag] .sd-hand-card:not(:disabled){touch-action:pan-x;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:grab}
+[data-card-drag] .vh-card-dragging{opacity:.22!important;cursor:grabbing!important}
+.vh-card-drag-active{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
+.vh-card-ghost{opacity:.97!important;cursor:grabbing!important;filter:drop-shadow(0 13px 13px #04101780);will-change:left,top;pointer-events:none!important}
+.vh-card-ghost *{pointer-events:none!important}
+.vh-drop-ready{outline:1px dashed #d4e9cd99;outline-offset:-5px;border-radius:18px;transition:background-color .12s,outline-color .12s,box-shadow .12s}
+.vh-drop-over{outline:2px solid #e9d398;outline-offset:-5px;background-color:#d6ddb411!important;box-shadow:inset 0 0 35px #e2d59718}
+@media(prefers-reduced-motion:reduce){.vh-drop-ready,.vh-drop-over{transition:none}}
+[data-motion=reduced] .vh-drop-ready,[data-motion=reduced] .vh-drop-over{transition:none}

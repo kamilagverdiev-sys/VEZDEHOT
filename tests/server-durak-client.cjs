@@ -51,3 +51,27 @@ test('a finished server table may open a new free table with the account lifetim
 test('readonly ownership cannot load, start or mutate a server table',async()=>{
  const calls=[],h=harness(async b=>{calls.push(b);return response(1)});h.deactivate();await h.controller.load();await h.controller.start();await h.controller.act({type:'resign'});assert.equal(calls.length,0);
 });
+
+test('a load-shaped mutation acknowledgement keeps the exact durable move for retry',async()=>{
+ const calls=[];let receipt=false;const h=harness(async b=>{calls.push(copy(b));if(b.op==='load')return response(receipt?5:4);return response(5,game(),receipt?'saved':'ok')});
+ await h.controller.load();await h.controller.act({type:'attack',cardId:'6♠'});
+ const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.match(h.controller.status().notice,/Подтверждение хода неполное/);assert.deepEqual(calls.map(b=>b.op),['load','action']);
+ receipt=true;await h.controller.load();assert.deepEqual(calls[2],JSON.parse(staged));assert.equal(calls[3].op,'load');assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().revision,5);
+});
+test('card intent uses exactly one currently legal server action and checks card ownership',()=>{
+ const {cardAction}=ctx.window.VEZDEHOT_SERVER_DURAK,state={ready:true,busy:false,pending:false,game:game()};
+ assert.deepEqual(copy(cardAction(state,'6♠')),{type:'attack',cardId:'6♠'});
+ assert.equal(cardAction(state,'A♥'),null);
+ state.game.legal.cards.push('A♥');assert.equal(cardAction(state,'A♥'),null);
+ state.game.legal.actions=['defend','take'];assert.deepEqual(copy(cardAction(state,'6♠')),{type:'defend',cardId:'6♠'});
+ state.game.legal.actions=['attack','defend'];assert.equal(cardAction(state,'6♠'),null);
+ state.game.legal.actions=['continue'];assert.equal(cardAction(state,'6♠'),null);
+});
+test('card intent cannot play while loading, awaiting a receipt or after a table finishes',()=>{
+ const {cardAction}=ctx.window.VEZDEHOT_SERVER_DURAK,base={ready:true,busy:false,pending:false,game:game()};
+ for(const change of [{ready:false},{busy:true},{pending:true},{game:null},{game:{...game(),over:true}}])assert.equal(cardAction({...base,...change},'6♠'),null);
+ const fresh=game();fresh.legal.cards=[];assert.equal(cardAction({...base,game:fresh},'6♠'),null);
+});
+test('a malformed revealed trump cannot replace the current server table',async()=>{
+ const g=game();g.trump='♠';g.trumpCard=card('A','♥');const h=harness(async()=>response(1,g));await h.controller.load();assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().game,null);
+});

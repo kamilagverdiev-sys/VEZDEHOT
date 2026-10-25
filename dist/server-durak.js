@@ -9,6 +9,7 @@ function projection(value){
   const g=value.game;if(g===null)return value;
   if(!g||typeof g.id!=='string'||!['attack','defend','resolve','roundEnd','over'].includes(g.phase)||!Array.isArray(g.players)||g.players.length<2||g.players.length>4||!Array.isArray(g.table)||g.table.length>6||!g.legal||!Array.isArray(g.legal.cards)||!Array.isArray(g.legal.actions)||typeof g.over!=='boolean')throw new Error('Состояние стола не удалось проверить. Повтори загрузку.');
   if(g.players.some((p,i)=>!p||typeof p.name!=='string'||!Number.isInteger(p.handCount)||p.handCount<0||p.handCount>36||(i===0?(!Array.isArray(p.hand)||p.hand.some(c=>!card(c))||p.hand.length!==p.handCount):Object.hasOwn(p,'hand')))||g.table.some(p=>!p||!card(p.a)||(p.d!==null&&!card(p.d)))||g.legal.actions.some(a=>!ACTIONS.includes(a))||g.legal.cards.some(id=>!g.players[0].hand.some(c=>c.id===id))||!Number.isInteger(g.deckCount)||g.deckCount<0||g.deckCount>36||!Number.isInteger(g.discardCount)||g.discardCount<0||g.discardCount>36||!Number.isInteger(g.attacker)||!g.players[g.attacker]||!Number.isInteger(g.defender)||!g.players[g.defender]||!Array.isArray(g.finished)||g.finished.some(i=>!Number.isInteger(i)||!g.players[i])||!Array.isArray(g.journal)||g.journal.length>80||g.journal.some(e=>!e||typeof e!=='object'))throw new Error('Состояние стола не удалось проверить. Повтори загрузку.');
+  if(g.trumpCard!==undefined&&g.trumpCard!==null&&(!card(g.trumpCard)||g.trumpCard.suit!==g.trump))throw new Error('Козырь стола не удалось проверить. Повтори загрузку.');
   return value;
 }
 function validFlight(value){
@@ -17,6 +18,13 @@ function validFlight(value){
   if(value.op==='start')return keys.every(k=>['op','actionId','expectedRevision','bots','difficulty'].includes(k))&&[1,2,3].includes(value.bots)&&['easy','normal','hard'].includes(value.difficulty);
   const a=value.action;
   return value.op==='action'&&keys.every(k=>['op','actionId','expectedRevision','gameId','action'].includes(k))&&typeof value.gameId==='string'&&a&&ACTIONS.includes(a.type)&&Object.keys(a).every(k=>['type','cardId'].includes(k))&&(['attack','defend'].includes(a.type)?typeof a.cardId==='string':Object.keys(a).length===1);
+}
+// A tap or a drop is only an intent. The current server projection decides the move.
+function cardAction(state,id){
+  const g=state?.game;
+  if(!state?.ready||state.busy||state.pending||!g||g.over||!g.players[0].hand.some(c=>c.id===id)||!g.legal.cards.includes(id))return null;
+  const moves=g.legal.actions.filter(a=>a==='attack'||a==='defend');
+  return moves.length===1?{type:moves[0],cardId:id}:null;
 }
 function createController(options){
   const key='vezdehot:server-durak:pending:v1:'+options.scope;
@@ -36,6 +44,7 @@ function createController(options){
       throw new Error(response.status===401?'Подтверди вход и повтори запрос. Он сохранён с тем же номером.':'Ответ не получен. Повтори запрос: один ход не будет применён дважды.');
     }
     if(response.data?.status==='conflict'){clear();state.notice='Стол уже изменился на другом устройстве. Загружена актуальная партия.';await fetchState();return;}
+    if(response.data?.status!=='saved')throw new Error('Подтверждение хода неполное. Повтори тот же запрос.');
     projection(response.data);clear();
     // A receipt can predate a newer phone/PC move. Always fetch the current revision.
     await fetchState();
@@ -52,11 +61,19 @@ function createController(options){
   }
   return Object.freeze({load,start:(bots=1,difficulty='normal')=>state.game&&!state.game.over?Promise.resolve(false):mutate({op:'start',bots,difficulty}),act:action=>state.game&&!state.game.over?mutate({op:'action',gameId:state.game.id,action}):Promise.resolve(false),status:()=>({...state,busy,pending:!!flight}),destroy:()=>{disposed=true;sequence++;}});
 }
-window.VEZDEHOT_SERVER_DURAK=Object.freeze({createController,projection,validFlight});
+window.VEZDEHOT_SERVER_DURAK=Object.freeze({createController,projection,validFlight,cardAction});
 if(!document.getElementById('app'))return;
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let controller=null,owner=null,selected=null,view={phase:'loading',game:null,revision:0,ready:false,busy:true};
+let controller=null,owner=null,selected=null,gestures=null,view={phase:'loading',game:null,revision:0,ready:false,busy:true};
 const gate=()=>!!owner&&window.VEZDEHOT?.scopeKey()===owner&&window.VEZDEHOT?.account().user?.id===owner&&!window.VEZDEHOT.account().switching&&window.VEZDEHOT_TAB_SESSION?.canWrite()===true&&!document.hidden;
+const writable=()=>gate()&&view.ready&&!view.busy&&!view.pending;
+const tableKey=()=>[owner,view.game?.id,view.revision,view.game?.phase].join('|');
+const stopGestures=()=>{gestures?.destroy();gestures=null;};
+function playCard(id,key=tableKey()){
+  if(!controller||!writable()||key!==tableKey())return false;
+  const action=cardAction(controller.status(),id);if(!action)return false;
+  selected=null;controller.act(action);return true;
+}
 const cardFace=(c,extra='')=>`<span class="sd-card ${['♥','♦'].includes(c.suit)?'red':''} ${extra}"><span>${esc(c.rank)}<small>${esc(c.suit)}</small></span><b aria-hidden="true">${esc(c.suit)}</b><i aria-hidden="true">${esc(c.rank)}${esc(c.suit)}</i></span>`;
 function statusText(g){
   if(g.over)return g.resigned?'Стол завершён':g.draw?'Ничья':g.finished.includes(0)?'Ты выиграл':'Партия завершена';
@@ -71,7 +88,24 @@ function actionButton(action,label,primary=false){return `<button class="sd-butt
 function controls(g){
   if(!view.ready)return `<button class="sd-button primary" data-retry ${view.busy||!gate()?'disabled':''}>${view.busy?'Подтверждаем…':view.pending?'Повторить этот запрос':'Загрузить стол'}</button>`;
   const actions=g.legal.actions,move=actions.includes('defend')?'defend':actions.includes('attack')?'attack':null;
-  return `${move?`<button class="sd-button primary" data-play="${move}" ${!selected||!gate()?'disabled':''}>${move==='defend'?'Отбить':'Положить'}${selected?' '+esc(selected):' карту'}</button>`:''}${actions.includes('take')?actionButton('take','Забрать карты'):''}${actions.includes('finish')?actionButton('finish','Бито · завершить',!move):''}${actions.includes('continue')?actionButton('continue',g.phase==='roundEnd'?'Следующий раунд →':'Продолжить атаку →',true):''}`;
+  return `${move?`<button class="sd-button primary" data-play="${move}" ${!selected||!gate()?'disabled':''}>${move==='defend'?'Отбить':'Положить'}${selected?' '+esc(selected):' карту'}</button>`:''}${actions.includes('take')?actionButton('take','Забрать карты'):''}${actions.includes('finish')?actionButton('finish','Бито · дальше',!move):''}${actions.includes('continue')?actionButton('continue',g.phase==='roundEnd'?'Следующий раунд →':'Продолжить атаку →',true):''}`;
+}
+function playHelp(g){
+  if(view.busy)return 'Сохраняем ход. Карты обновятся после подтверждения.';
+  if(!view.ready)return 'Восстанови связь кнопкой выше, чтобы продолжить эту партию.';
+  if(g.legal.actions.includes('defend'))return 'Перетащи карту на стол или выбери её и нажми «Отбить». На решение нет таймера.';
+  if(g.legal.actions.includes('attack'))return 'Перетащи карту на стол или выбери её и нажми «Положить». На решение нет таймера.';
+  if(g.legal.actions.includes('continue'))return g.phase==='roundEnd'?'Заход завершён. Следующий раунд продолжит эту же партию.':'Карта отбита. Нажми «Продолжить атаку», чтобы увидеть следующие ходы.';
+  if(g.legal.actions.includes('finish'))return 'Все карты отбиты. Нажми «Бито», чтобы закончить этот заход.';
+  return 'Если отбиться нечем, забери карты. Партия продолжится за этим же столом.';
+}
+function handHint(g){
+  if(selected)return 'Выбрана '+selected;
+  if(g.legal.cards.length)return g.players[0].hand.length>7?'Листай карты вбок':'Светлые карты можно сыграть';
+  if(g.legal.actions.includes('take'))return 'Нет карты для защиты';
+  if(g.legal.actions.includes('continue'))return 'Продолжи заход кнопкой';
+  if(g.legal.actions.includes('finish'))return 'Все карты отбиты';
+  return 'Ход соперника';
 }
 function journal(g){
   const names=i=>g.players[i]?.name||'Игрок',c=x=>x?x.rank+x.suit:'';
@@ -79,27 +113,36 @@ function journal(g){
 }
 function setup(over=false){return `<section class="sd-setup"><span class="sd-eyebrow">СЕРВЕРНЫЙ СТОЛ · БЕЗ СТАВКИ</span><h1>${over?'Ещё одну партию?':'Карты остаются за столом'}</h1><p>Начни здесь, продолжи с того же аккаунта на телефоне или ПК. Раздача, ходы и ответы ботов проверяются сервером.</p><div class="sd-setup-options"><label>Соперники<select id="sd-bots"><option value="1">Один бот</option><option value="2">Два бота</option><option value="3">Три бота</option></select></label><label>Характер ботов<select id="sd-difficulty"><option value="easy">Мягкий</option><option value="normal" selected>Обычный</option><option value="hard">Расчётливый</option></select></label></div><button class="sd-button primary" data-start ${!gate()||!view.ready?'disabled':''}>Открыть стол · бесплатно</button><p class="sd-footnote">Пилотный режим: без списания монет, наград и XP. Партия сохраняется отдельно от обычного Дурака.</p></section>`;}
 function render(){
+  stopGestures();
   const app=$('#app');if(!app)return;const a=window.VEZDEHOT?.account(),g=view.game,opened=$('[data-journal]')?.open||false;
-  const header=`<header class="sd-header"><a class="sd-back" href="./index.html" aria-label="В лобби">‹</a><div><a class="sd-brand" href="./index.html">VEZDEHOT</a><span>Серверный Дурак</span></div><button class="sd-account" data-account>${esc(a?.user?window.VEZDEHOT.getProfile().nick:'Войти')}</button></header>`;
+  const header=`<header class="sd-header"><a class="sd-back" href="./index.html" aria-label="В лобби">‹</a><div><a class="sd-brand" href="./index.html">VEZDEHOT</a><span>Дурак · серверный стол</span></div><button class="sd-account" data-account>${esc(a?.user?window.VEZDEHOT.getProfile().nick:'Войти')}</button></header>`;
   const notice=view.notice?`<div class="sd-notice" role="status">${esc(view.notice)}</div>`:'';
   if(!a?.user){app.innerHTML=header+`<section class="sd-setup"><span class="sd-eyebrow">ОДНА ПАРТИЯ · РАЗНЫЕ УСТРОЙСТВА</span><h1>Твой стол ждёт тебя</h1><p>Войди в аккаунт: сервер сохранит карты и каждый подтверждённый ход. Соперник — бот, ставка не нужна.</p><button class="sd-button primary" data-account ${a?.loading||a?.switching?'disabled':''}>Войти и открыть стол</button><a class="sd-link" href="./index.html">Вернуться к играм для гостя →</a></section>`;bind();return;}
-  const stateTitle=!gate()?'Управление недоступно':view.busy?'Проверяем сервер':view.phase==='saved'?'Ходы сохранены':'Нужна связь';
+  const stateTitle=!gate()?'Управление недоступно':view.busy?'Сохраняем ход…':view.phase==='saved'?'Ходы сохранены':'Нужна связь';
   const sync=`<div class="sd-sync" role="status"><span class="sd-sync-dot ${view.phase==='saved'&&gate()?'saved':''}"></span><span>${stateTitle}</span><button data-retry ${view.busy||!gate()?'disabled':''}>${view.pending?'Повторить запрос':'Обновить'}</button></div>`;
   if(!g){app.innerHTML=header+sync+notice+setup();bind();return;}
-  const writable=gate()&&view.ready,legal=new Set(g.legal.cards),players=g.players.slice(1).map((p,i)=>{const seat=i+1,active=!g.over&&((g.phase==='defend'&&g.defender===seat)||(g.phase==='attack'&&g.attacker===seat));return `<article class="sd-player ${active?'active':''}"><span class="sd-avatar">${esc(p.face||'♟')}</span><div><b>${esc(p.name)}</b><small>${g.finished.includes(seat)?'Вышел без карт':p.handCount+' карт'}${active?' · ход':''}</small></div><span class="sd-hidden" aria-hidden="true">▥</span></article>`}).join('');
-  const board=g.table.length?g.table.map((p,i)=>`<div class="sd-pair"><span class="sd-pair-number">${i+1}</span>${cardFace(p.a,'attack')}${p.d?cardFace(p.d,'defence'):'<span class="sd-wait" aria-label="Карта ещё не отбита">···</span>'}</div>`).join(''):'<p class="sd-empty-table">Новый заход<small>Карты появятся здесь</small></p>';
-  const hand=g.players[0].hand.map(c=>`<button class="sd-hand-card ${selected===c.id?'selected':''}" data-card="${esc(c.id)}" aria-pressed="${selected===c.id}" aria-label="${esc(c.rank+' '+c.suit)}${legal.has(c.id)?', можно сыграть':', сейчас недоступна'}" ${!writable||!legal.has(c.id)?'disabled':''}>${cardFace(c)}</button>`).join('');
+  const legal=new Set(g.legal.cards),players=g.players.slice(1).map((p,i)=>{
+    const seat=i+1,active=!g.over&&((g.phase==='defend'&&g.defender===seat)||(g.phase==='attack'&&g.attacker===seat)),finished=g.finished.includes(seat);
+    return `<article class="sd-player ${active?'active':''} ${finished?'finished':''}"><div class="sd-seat"><span class="sd-avatar" aria-hidden="true">${esc(p.face||'♟')}</span><span class="sd-card-count" aria-label="${p.handCount} карт">${p.handCount}</span></div><b>${esc(p.name)}</b><small>${finished?'Без карт':g.defender===seat?'Защищается':g.attacker===seat?'Атакует':'За столом'}</small><span class="sd-hidden" aria-hidden="true"><i></i><i></i><i></i></span></article>`;
+  }).join('');
+  const board=g.table.length?g.table.map((p,i)=>`<div class="sd-pair ${p.d?'beaten':'unbeaten'}" aria-label="Пара ${i+1}${p.d?', отбита':', нужно отбить'}"><span class="sd-pair-number">${i+1}</span>${cardFace(p.a,'attack')}${p.d?cardFace(p.d,'defence'):'<span class="sd-wait" aria-hidden="true">↗</span>'}</div>`).join(''):'<div class="sd-empty-table"><span aria-hidden="true">♠</span><b>Твой следующий ход</b><small>Сыгранные карты — здесь</small></div>';
+  const cards=g.players[0].hand,fan=cards.length<=7,center=(cards.length-1)/2;
+  const hand=cards.map((c,i)=>`<button class="sd-hand-card ${selected===c.id?'selected':''}" data-card="${esc(c.id)}" style="--angle:${fan?(i-center)*2:0}deg;--lift:${fan?Math.abs(i-center)*1.8:0}px;--order:${i}" aria-pressed="${selected===c.id}" aria-label="${esc(c.rank+' '+c.suit)}${legal.has(c.id)?', можно сыграть':', сейчас недоступна'}" ${!writable()||!legal.has(c.id)?'disabled':''}>${cardFace(c)}</button>`).join('');
   const over=g.over?`<section class="sd-result"><span class="sd-eyebrow">ПАРТИЯ ЗАВЕРШЕНА</span><h1>${statusText(g)}</h1><p>${esc(g.message)}</p><small>Ставок и начислений в этом режиме нет.</small></section>${setup(true)}`:'';
-  app.innerHTML=header+sync+notice+(!gate()?'<div class="sd-notice">Продолжить можно в активной вкладке после загрузки аккаунта.</div>':'')+`<section class="sd-shell"><div class="sd-table-meta"><span>БЕЗ СТАВКИ</span><span>РАУНД ${esc(g.round)}</span></div><div class="sd-felt"><div class="sd-opponents" style="--opponents:${g.players.length-1}">${players}</div><div class="sd-stock"><span>В колоде <b>${g.deckCount}</b></span><span>Козырь <b class="${['♥','♦'].includes(g.trump)?'red':''}">${esc(g.trump)}</b></span><span>Бито <b>${g.discardCount}</b></span></div><div class="sd-battle">${board}</div><div class="sd-table-caption">${esc(g.players[g.attacker]?.name)} атакует · ${esc(g.players[g.defender]?.name)} защищается</div></div>${!g.over?`<div class="sd-control"><div class="sd-turn"><span class="sd-eyebrow">${view.busy?'ЗАПРОС ОТПРАВЛЕН':'ТВОЁ РЕШЕНИЕ'}</span><h1>${statusText(g)}</h1><p>${esc(g.message)}</p></div><div class="sd-hand-label"><b>Твои карты · ${g.players[0].handCount}</b><span>${selected?'Выбрана '+esc(selected):g.legal.cards.length?'Выбери светлую карту':'Карты остаются у тебя'}</span></div><div class="sd-hand">${hand||'<p>У тебя не осталось карт.</p>'}</div><div class="sd-actions">${controls(g)}</div><p class="sd-help">После выбора карты подтверди ход кнопкой. Таймера на решение нет.</p></div>`:''}</section>${over}<details class="sd-rules"><summary>Правила этого стола</summary><p>В колоде 36 карт. Старшая карта той же масти отбивает младшую; козырь отбивает другую масть. Козырь можно отбить только старшим козырем.</p><p>Атакующий подкидывает карты того же достоинства, что уже есть на столе. В одном заходе не больше шести атак и не больше карт, чем было у защитника в начале захода.</p><p>Если отбиться нечем, забери карты. После завершения захода игроки добирают до шести. Когда колода пуста, освободи руку: последний игрок с картами проигрывает.</p></details><details class="sd-journal" data-journal ${opened?'open':''}><summary>История ходов <span>${g.journal.length}</span></summary><ol>${journal(g)}</ol></details><footer class="sd-footer"><p>Чтобы продолжить на другом устройстве, дождись статуса «Ходы сохранены» и войди там в тот же аккаунт.</p>${!g.over?`<button class="sd-link" data-resign ${!writable?'disabled':''}>Завершить этот стол</button>`:''}<a class="sd-link" href="./index.html">Все игры →</a></footer>`;bind();
+  const handArea=!g.over?`<div class="sd-control"><div class="sd-turn" role="status"><span class="sd-turn-dot" aria-hidden="true"></span><div><h1>${statusText(g)}</h1><p>${esc(g.message)}</p></div></div><div class="sd-hand-label"><b>Твоя рука <span>${cards.length}</span></b><span>${esc(handHint(g))}</span></div><div class="sd-hand ${fan?'fan':'many'}" aria-label="Твои карты">${hand||'<p class="sd-hand-empty">Ты вышел без карт</p>'}</div><div class="sd-actions">${controls(g)}</div><p class="sd-help">${playHelp(g)}</p></div>`:'';
+  const stock=`<div class="sd-stock" aria-label="В колоде ${g.deckCount} карт. Козырь ${esc(g.trumpCard?g.trumpCard.rank+g.trump:g.trump)}"><div class="sd-deck-art" aria-hidden="true"><span class="sd-trump ${['♥','♦'].includes(g.trump)?'red':''}">${g.trumpCard?`<small>${esc(g.trumpCard.rank)}</small>`:''}${esc(g.trump||'—')}</span>${g.deckCount?'<span class="sd-pack"><i>V</i></span>':''}</div><div><b>${g.deckCount}</b><span>в колоде</span></div></div><div class="sd-discard"><b>${g.discardCount}</b><span>в отбое</span></div>`;
+  app.innerHTML=header+sync+notice+(!gate()?'<div class="sd-notice">Продолжить можно в активной вкладке после загрузки аккаунта.</div>':'')+`<section class="sd-shell"><div class="sd-table-meta"><span><i></i> БЕЗ СТАВКИ</span><span>РАУНД ${esc(g.round)}</span></div><div class="sd-felt"><div class="sd-opponents" style="--opponents:${g.players.length-1}">${players}</div><div class="sd-arena">${stock}<div class="sd-battle" data-drop-zone data-count="${g.table.length}" aria-label="Игровой стол">${board}</div><div class="sd-table-caption">${esc(g.players[g.attacker]?.name)} атакует <span>·</span> ${esc(g.players[g.defender]?.name)} защищается</div></div>${handArea}</div></section>${over}<details class="sd-rules"><summary>Правила этого стола</summary><p>В колоде 36 карт. Старшая карта той же масти отбивает младшую; козырь отбивает другую масть. Козырь можно отбить только старшим козырем.</p><p>Атакующий подкидывает карты того же достоинства, что уже есть на столе. В одном заходе не больше шести атак и не больше карт, чем было у защитника в начале захода.</p><p>Если отбиться нечем, забери карты. После завершения захода игроки добирают до шести. Когда колода пуста, освободи руку: последний игрок с картами проигрывает.</p></details><details class="sd-journal" data-journal ${opened?'open':''}><summary>История ходов <span>${g.journal.length}</span></summary><ol>${journal(g)}</ol></details><footer class="sd-footer"><p>Чтобы продолжить на другом устройстве, дождись статуса «Ходы сохранены» и войди там в тот же аккаунт.</p>${!g.over?`<button class="sd-link" data-resign ${!writable()?'disabled':''}>Завершить этот стол</button>`:''}<a class="sd-link" href="./index.html">Все игры →</a></footer>`;bind();
 }
 function bind(){
   document.querySelectorAll('[data-account]').forEach(b=>b.onclick=()=>window.VEZDEHOT.openAccount());
   document.querySelectorAll('[data-retry]').forEach(b=>b.onclick=()=>controller?.load());
   const start=$('[data-start]');if(start)start.onclick=()=>{selected=null;controller?.start(Number($('#sd-bots').value),$('#sd-difficulty').value)};
-  document.querySelectorAll('[data-card]').forEach(b=>b.onclick=()=>{if(!gate()||!view.ready)return;const id=b.dataset.card;selected=selected===id?null:id;render();document.querySelectorAll('[data-card]').forEach(node=>{if(node.dataset.card===id)node.focus({preventScroll:true})})});
-  document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>{selected=null;controller?.act({type:b.dataset.action})});
-  const play=$('[data-play]');if(play)play.onclick=()=>{if(!selected||!gate())return;const cardId=selected;selected=null;controller?.act({type:play.dataset.play,cardId})};
-  const resign=$('[data-resign]');if(resign)resign.onclick=()=>{if(!gate()||!view.ready)return;resign.outerHTML='<div class="sd-resign"><p>Завершить эту партию? Карты этого стола больше нельзя будет доиграть.</p><button class="sd-button" data-resign-cancel>Продолжить партию</button><button class="sd-button" data-resign-confirm>Завершить</button></div>';$('.sd-resign [data-resign-cancel]').onclick=render;$('.sd-resign [data-resign-confirm]').onclick=()=>controller?.act({type:'resign'});$('.sd-resign [data-resign-cancel]').focus()};
+  document.querySelectorAll('[data-card]').forEach(b=>b.onclick=()=>{const id=b.dataset.card;if(!writable()||!cardAction(view,id))return;selected=selected===id?null:id;render();document.querySelectorAll('[data-card]').forEach(node=>{if(node.dataset.card===id)node.focus({preventScroll:true})})});
+  document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>{if(!writable()||!view.game?.legal.actions.includes(b.dataset.action))return;selected=null;controller?.act({type:b.dataset.action})});
+  const play=$('[data-play]');if(play)play.onclick=()=>{if(selected)playCard(selected)};
+  const root=$('.sd-shell'),key=tableKey();
+  if(root&&window.VEZDEHOT_CARDS)gestures=window.VEZDEHOT_CARDS.bind({root,cardSelector:'.sd-hand-card',dropSelector:'[data-drop-zone]',getCardId:node=>node.dataset.card,getStateKey:tableKey,canStart:id=>writable()&&!!cardAction(view,id),canDrop:id=>writable()&&!!cardAction(view,id),onDrop:id=>playCard(id,key)});
+  const resign=$('[data-resign]');if(resign)resign.onclick=()=>{if(!writable())return;stopGestures();resign.outerHTML='<div class="sd-resign"><p>Завершить эту партию? Карты этого стола больше нельзя будет доиграть.</p><button class="sd-button" data-resign-cancel>Продолжить партию</button><button class="sd-button" data-resign-confirm>Завершить</button></div>';$('.sd-resign [data-resign-cancel]').onclick=render;$('.sd-resign [data-resign-confirm]').onclick=()=>{if(writable())controller?.act({type:'resign'})};$('.sd-resign [data-resign-cancel]').focus()};
 }
 function boot(){
   const a=window.VEZDEHOT?.account();if(!a)return;
@@ -113,5 +156,5 @@ for(const event of ['vezdehot:profile','vezdehot:sessionactive'])document.addEve
 for(const event of ['vezdehot:sessionpause','vezdehot:sessionlost'])document.addEventListener(event,()=>{controller?.destroy();controller=null;owner=null;view={...view,ready:false,busy:false};render()});
 document.addEventListener('vezdehot:accountchange',()=>{controller?.destroy();controller=null;owner=null;selected=null;view={phase:'loading',game:null,revision:0,ready:false,busy:false};render()});
 window.addEventListener('online',()=>{if(gate()&&!view.busy)controller?.load()});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){controller?.destroy();controller=null;view={...view,ready:false,busy:false}}else boot()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){stopGestures();controller?.destroy();controller=null;view={...view,ready:false,busy:false}}else boot()});
 })();
