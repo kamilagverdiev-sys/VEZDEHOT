@@ -79,3 +79,20 @@ html[data-motion='reduced'] .durak-app *,html[data-motion='reduced'] .durak-app 
  .app.setup .setup-card-art>i+i{left:40px;top:32px;transform:rotate(12deg)}
  .app.setup .setup-card-art small{font-size:32px;margin-top:8px}
 }
+
+/* Club table finish: readable brass details and a separate, tactile action rail. */
+.durak-app{--dt-accent:#efd6a0;--dt-muted:#b7c8bc}
+body:has(.durak-app){background:radial-gradient(ellipse at 50% 0,#313728 0,transparent 58%),linear-gradient(130deg,#17131b,#101c18 65%)}
+.dt-top{padding:9px 12px;border:1px solid #e2c29530;border-radius:19px;background:linear-gradient(110deg,#35232df2,#211c28f2);box-shadow:inset 0 1px #fff3df0a,0 8px 25px #03080826}
+.dt-brand span{color:#d0c1cd}.dt-balance{padding:8px 11px;margin-right:2px;border:1px solid #d7b5714a;border-radius:12px;background:#130e1775;color:#f4dda5;font-weight:700}.dt-balance small{border-color:#ddb67c;color:#f4dda5}
+.dt-shell{border-color:#b18e54;box-shadow:0 20px 65px #03080766,0 0 0 4px #382d20,0 0 0 5px #d2ad6650,inset 0 1px #f8dfaa24}
+.dt-table-meta{color:#d3c3a0;background:linear-gradient(100deg,#272a20,#273426);border-bottom-color:#d9ba7730}
+.dt-felt:before{border-color:#dbcb9647}.dt-player{border-color:#d8bc7e38;background:linear-gradient(140deg,#263529e8,#172b20e8)}
+.dt-player.is-active{border-color:#f0d393;background:linear-gradient(145deg,#3d5130,#2b412b);box-shadow:0 0 0 2px #e9ca8421,0 7px 18px #06180d55}
+.dt-player-copy span{color:#c3d1ba}.dt-avatar{border-color:#c4a15e7a}.dt-control{background:radial-gradient(ellipse at 50% 0,#60453336,transparent 70%),linear-gradient(#30212a,#241b24);border-top-color:#d0ab6870}
+.dt-status p,.dt-selected{color:#d1c6c9}.dt-hand-head{color:#c0adb8}.dt-hand-head b{color:#f0e1da}.dt-hand-head b span{color:#c8b7c0}.dt-status-icon{border-color:#d8b46b4a;background:#d3af6b0c;color:#ead2a7}
+.dt-button.primary{color:#382711;border-color:#f3dba5;background:linear-gradient(145deg,#f6dfaa,#d9b975);box-shadow:inset 0 1px #fff2cc,0 4px 14px #c69c4b14}.dt-button{background:linear-gradient(#473039,#35242d);border-color:#cba8764d;color:#eadbc5}
+.dt-actions [data-take]{border-color:#cb8b815c;background:#722f312e;color:#f0c5bc}.dt-thinking{color:#d0c7c6}
+.dt-journal summary{min-height:44px;display:flex;align-items:center}.dt-journal{background:#212623;border-color:#d5c39830}
+@media(max-width:520px){.dt-top{padding:7px 8px;gap:7px;border-radius:16px}.dt-brand{font-size:14px}.dt-brand span{font-size:11px}.dt-header-right{gap:5px}.dt-balance{display:block;font-size:12px;padding:5px 8px;max-width:100%;overflow-wrap:anywhere}.dt-header-right{display:grid;grid-template-columns:44px 44px}.dt-balance{grid-column:1/-1;grid-row:2;text-align:center;margin:0;line-height:1.35}.dt-top>.dt-icon{align-self:center}.dt-shell{box-shadow:0 13px 32px #020c0850,0 0 0 2px #382d20,0 0 0 3px #d2ad6640}.dt-player-copy span{white-space:normal;min-height:28px}.dt-status h1{font-size:18px}.dt-actions{flex-wrap:wrap}.dt-actions>.dt-button{min-height:48px}.dt-selected{font-size:12px;line-height:1.5}.dt-hand{scroll-snap-type:x proximity}.dt-hand-card{scroll-snap-align:start}}
+@media(max-width:350px){.dt-brand{font-size:12px;letter-spacing:.025em}.dt-brand span{font-size:11px}.dt-top{gap:6px;padding-inline:7px}.dt-header-right{gap:4px}.dt-player-copy b{font-size:12px}}

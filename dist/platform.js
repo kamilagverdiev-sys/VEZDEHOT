@@ -37,7 +37,7 @@ async function networkFetch(input,options={}){const controller=new AbortControll
 // The remembered scope enables offline play; it does not establish an authenticated session.
 let scope=read(ACTIVE,'guest');if(typeof scope!=='string'||!/^([a-f0-9-]{36}|guest)$/.test(scope))scope='guest';
 let profile=clean(read(PREFIX+scope,BASE)),client=null,user=null,booted=false,syncTimer=null,syncFlight=null;
-let cloudState='local',authError='',providers={google:!!config.googleEnabled,telegram:!!config.telegramEnabled};
+let cloudState='local',authError='',authPending=false,providers={google:!!config.googleEnabled,telegram:!!config.telegramEnabled};
 let activationEpoch=0,activationRequest=0,activationFlight=null,hydrating=false,cloudHydrated=false,hydrationOps=pendingOperations(scope),accountSwitching=false;
 let resolveReady;const ready=new Promise(r=>resolveReady=r);
 function current(id,epoch){return (ownsProfile()||handoffFlush)&&scope===id&&user?.id===id&&activationEpoch===epoch}
@@ -171,7 +171,7 @@ async function performActivate(nextUser,next){
 }
 function hasMiniAppData(){return !!(config.telegramMiniAppEnabled&&config.telegramAuthUrl&&typeof window.Telegram?.WebApp?.initData==='string'&&window.Telegram.WebApp.initData.length)}
 function refreshTelegramProvider(){providers.telegram=!!config.telegramEnabled||hasMiniAppData()}
-async function checkProviders(){refreshTelegramProvider();if(!config.url)return;try{const r=await bounded(networkFetch(config.url+'/auth/v1/settings',{headers:{apikey:config.publishableKey}}));if(r.ok){const x=await bounded(r.json());providers.google=!!x.external?.google;refreshTelegramProvider()}}catch{}}
+async function checkProviders(){refreshTelegramProvider();if(!config.url)return;try{const r=await bounded(networkFetch(config.url+'/auth/v1/settings',{headers:{apikey:config.publishableKey}}));if(r.ok){const x=await bounded(r.json());providers.google=!!x.external?.google;refreshTelegramProvider()}}catch{}finally{emit()}}
 async function init(){
   try{if(window.VEZDEHOT_TAB_SESSION)await window.VEZDEHOT_TAB_SESSION.start(scope,{beforeYield:flushBeforeYield})}catch{cloudState='offline';authError='Эта вкладка не получила управление игрой.';return}
   // Another tab may have changed the profile while this page was waiting for its lock.
@@ -179,38 +179,74 @@ async function init(){
   profile=clean(read(PREFIX+scope,BASE));hydrationOps=pendingOperations(scope);
   compatibility();if(!window.supabase||!config.url){cloudState=scope==='guest'?'local':'offline';if(checkpointsEnabled&&scope!=='guest')checkpointUnavailable='Сервис входа не загрузился. Восстанови соединение и обнови страницу; местные партии сохранены.';booted=true;readyBlocked=checkpointsEnabled&&scope!=='guest';resolveReady();emit();return}
   try{
+    const params=new URLSearchParams(location.search),fragment=new URLSearchParams((location.hash||'').replace(/^#/,''));
+    const returning=params.has('code')||params.has('error')||fragment.has('error');
+    if(params.has('error')||fragment.has('error'))authError='Вход отменён или не завершён. Прогресс на устройстве сохранён.';
     client=window.supabase.createClient(config.url,config.publishableKey,{auth:{flowType:'pkce',persistSession:true,autoRefreshToken:true,detectSessionInUrl:true},global:{fetch:networkFetch}});
-    const params=new URLSearchParams(location.search);if(params.has('error'))authError='Вход отменён или не завершён. Гостевой прогресс сохранён.';
     client.auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_IN'||event==='SIGNED_OUT'||event==='USER_UPDATED')setTimeout(()=>{if(!ownsProfile()&&booted)return;activationFlight=activate(session);activationFlight.catch(()=>{})},0)});
+    // getSession() can return an older session after a failed OAuth exchange.
+    // Observe initialization separately so the callback never calls that success.
+    if(typeof client.auth.initialize==='function'){
+      const initialized=await bounded(client.auth.initialize());
+      if(initialized.error){if(returning)authError=authError||'Подтверждение входа истекло или открыто в другом браузере. Начни вход заново на этом устройстве.';else throw initialized.error}
+    }
     const epoch=activationEpoch,request=activationRequest;const {data,error}=await bounded(client.auth.getSession());if(error)throw error;
     if(epoch===activationEpoch&&request===activationRequest)activationFlight=activate(data.session);
     while(activationFlight){const pending=activationFlight;try{await pending}catch(error){if(error?.code==='SESSION_SUPERSEDED'&&activationFlight!==pending)continue;throw error}if(activationFlight===pending)break}
   }catch{cloudState='offline';authError='Не удалось связаться с сервисом входа. Можно продолжить гостем.';if(checkpointsEnabled&&scope!=='guest'){checkpointUnavailable='Не удалось подтвердить вход. Восстанови соединение и обнови страницу; местные партии сохранены.';authError=checkpointUnavailable}}
   finally{booted=true;readyBlocked=checkpointsEnabled&&scope!=='guest'&&!gameplayWritable();resolveReady();checkProviders();emit()}
 }
-function account(){refreshTelegramProvider();const identities=user?.identities?.map(x=>x.provider)||[];if(user?.app_metadata?.telegram_id&&!identities.includes('custom:telegram'))identities.push('custom:telegram');return {user:user?{id:user.id,email:user.email||'',providers:identities}:null,scope,status:checkpointsEnabled&&scope!=='guest'?checkpointStatus().phase:cloudState,error:authError,loading:hydrating,switching:accountSwitching,providers:{...providers},storagePersisted:!storageFailed}}
+function account(){refreshTelegramProvider();const identities=user?.identities?.map(x=>x.provider)||[];if(user?.app_metadata?.telegram_id&&!identities.includes('custom:telegram'))identities.push('custom:telegram');return {user:user?{id:user.id,email:user.email||'',providers:identities}:null,scope,status:checkpointsEnabled&&scope!=='guest'?checkpointStatus().phase:cloudState,error:authError,loading:hydrating,authPending,switching:accountSwitching,providers:{...providers},storagePersisted:!storageFailed}}
 async function login(provider,link=false){
   if(!ownsProfile())throw new Error('Продолжи игру в активной вкладке.');
+  if(authPending)throw new Error('Подтверждение входа уже выполняется. Подожди немного.');
   if(accountSwitching||hydrating)throw new Error('Профиль загружается. Подожди немного.');
   if(!client)throw new Error('Нет соединения с сервисом входа. Попробуй позже.');
   refreshTelegramProvider();
   if(!['google','telegram'].includes(provider)||!providers[provider])throw new Error('Этот способ входа ещё подключается. Играй гостем — прогресс сохранится на устройстве.');
+  const startScope=scope,startEpoch=activationEpoch,startRequest=activationRequest;
+  const unchanged=()=>ownsProfile()&&scope===startScope&&activationEpoch===startEpoch&&activationRequest===startRequest&&!accountSwitching;
+  const requireCurrent=()=>{if(!unchanged())throw new Error('Активная вкладка или аккаунт изменились. Повтори вход в текущей вкладке.')};
+  authPending=true;authError='';emit();
+  try{
   if(provider==='telegram'&&hasMiniAppData()){
     if(user||link)throw new Error('Для входа через Telegram сначала выйди из текущего аккаунта. Профили останутся отдельно.');
     const response=await bounded(networkFetch(config.telegramAuthUrl,{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},body:JSON.stringify({initData:window.Telegram.WebApp.initData})}));
     const payload=await bounded(response.json());
+    requireCurrent();
     if(!response.ok||typeof payload.token_hash!=='string'||payload.type!=='magiclink')throw new Error('Telegram не подтвердил вход. Открой игру заново через бота или продолжи гостем.');
     const result=await bounded(client.auth.verifyOtp({token_hash:payload.token_hash,type:'magiclink'}));
     if(result.error||!result.data?.session)throw new Error('Не удалось завершить вход через Telegram. Попробуй открыть игру через бота ещё раз.');
+    if(!unchanged()&&!(ownsProfile()&&user?.id===result.data.session.user.id&&scope===user.id))throw new Error('Активная вкладка или аккаунт изменились. Обнови страницу в текущей вкладке.');
     await activate(result.data.session);return;
   }
   if(link&&(!user||!config.manualLinkingEnabled))throw new Error('Подключение второго способа входа ещё не включено.');
-  const id=scope;write(PREFIX+scope,profile);if(user)await sync();if(scope!==id||accountSwitching)return;
-  const options={redirectTo:location.origin+'/auth-callback.html'},p=provider==='telegram'?config.telegramProvider:'google';
+  write(PREFIX+scope,profile);if(user)await sync();requireCurrent();
+  const options={redirectTo:location.origin+'/auth-callback.html',skipBrowserRedirect:true},p=provider==='telegram'?config.telegramProvider:'google';
   const result=await bounded(link?client.auth.linkIdentity({provider:p,options}):client.auth.signInWithOAuth({provider:p,options}));
-  if(result.error)throw new Error('Вход не завершён. Попробуй ещё раз или продолжи гостем.');
+  requireCurrent();
+  if(result.error||!result.data?.url)throw new Error('Вход не завершён. Попробуй ещё раз или продолжи гостем.');
+  location.assign(result.data.url);
+  }finally{authPending=false;emit()}
 }
 async function signOut(){if(!ownsProfile()||!client||!user||accountSwitching)return;const id=user.id;await sync();if(!ownsProfile()||user?.id!==id||scope!==id)return;const {error}=await bounded(client.auth.signOut({scope:'local'}));if(error)throw new Error('Не удалось выйти. Проверь соединение и повтори.');await activate(null)}
+async function serverDurakRequest(body){
+  const endpoint=config.serverDurakUrl,expected=typeof config.url==='string'?config.url.replace(/\/$/,'')+'/functions/v1/server-durak':'';
+  if(!endpoint||endpoint!==expected)throw new Error('Серверный стол пока недоступен.');
+  if(!client||!user||user.is_anonymous||scope!==user.id||hydrating||accountSwitching||authPending||!ownsProfile())throw new Error('Для серверного стола войди в аккаунт в активной вкладке.');
+  let encoded;try{if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();encoded=JSON.stringify(body);if(encoded.length>16384)throw new Error()}catch{throw new Error('Не удалось подготовить действие стола.')}
+  const id=user.id,epoch=activationEpoch,request=activationRequest;
+  const requireCurrent=()=>{if(!ownsProfile()||scope!==id||user?.id!==id||activationEpoch!==epoch||activationRequest!==request||accountSwitching){const error=new Error('Активный аккаунт или вкладка изменились. Открой серверный стол заново.');error.code='STALE_ACCOUNT';throw error}};
+  try{
+    const sessionResult=await bounded(client.auth.getSession());requireCurrent();
+    const session=sessionResult.data?.session;
+    if(sessionResult.error||!session||session.user?.id!==id||session.user.is_anonymous||typeof session.access_token!=='string'||!session.access_token)throw new Error('AUTH_REQUIRED');
+    const response=await bounded(networkFetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey,Authorization:'Bearer '+session.access_token},body:encoded}));requireCurrent();
+    const data=await bounded(response.json());requireCurrent();
+    if(!data||typeof data!=='object'||Array.isArray(data))throw new Error('INVALID_RESPONSE');
+    return {ok:response.ok,status:response.status,data};
+  }catch(error){if(error?.code==='STALE_ACCOUNT')throw error;requireCurrent();if(error?.message==='AUTH_REQUIRED')throw new Error('Сессия входа истекла. Войди в аккаунт снова.');throw new Error('Нет ответа от сервера. Повтори действие при стабильном соединении.')}
+}
 function canImportGuest(){
   const eligible=!!(gameplayWritable()&&user&&cloudHydrated&&!hydrating&&profile.games===0&&profile.xp===0&&profile.wins===0&&profile.balance===BASE.balance&&!profile.history.length&&!read('vezdehot:guest-import:'+user.id,false)&&read(PREFIX+'guest',{}).games>0);
   if(!eligible||!checkpointsEnabled)return eligible;
@@ -363,7 +399,7 @@ function providerPresentation(v,a){
   const openBot=v==='telegram'&&!a.user&&config.telegramMiniAppEnabled&&!hasMiniAppData()&&!config.telegramEnabled;
   const linkBlocked=!!a.user&&(!config.manualLinkingEnabled||(v==='telegram'&&hasMiniAppData()));
   return {openBot,text:connected?name+' подключён':openBot?'Открыть в Telegram':a.user?'Подключить '+name:'Войти через '+name,
-    disabled:!!(a.loading||a.switching||connected||linkBlocked||(!a.providers[v]&&!openBot)),
+    disabled:!!(a.loading||a.authPending||a.switching||connected||linkBlocked||(!a.providers[v]&&!openBot)),
     hint:connected?'':openBot?'Подтверждение внутри бота':linkBlocked?'Отдельный способ входа':!a.providers[v]?'Подключается':''};
 }
 function providerMarkup(v,a){const p=providerPresentation(v,a);return `<button class="vh-button provider" data-provider="${v}" ${p.disabled?'disabled':''}><span>${v==='google'?'G':'↗'}</span>${p.text}${p.hint?'<small>'+p.hint+'</small>':''}</button>`}
@@ -419,7 +455,7 @@ function accountMessage(a){if(authError)return authError;if(a.user)return 'Го�
 function refreshAccountProviders(){refreshCheckpointUI();const modal=document.querySelector('#vh-account');if(!modal)return;const oldCard=modal.querySelector('[data-checkpoint-card]');if(oldCard)oldCard.outerHTML=checkpointCard();const a=account(),state=modal.querySelector('[data-save-state]');if(state){state.hidden=checkpointsEnabled&&!!a.user&&a.storagePersisted;state.dataset.status=!a.storagePersisted?'warning':a.loading?'loading':a.status;modal.querySelector('[data-save-state-copy]').textContent=savingMessage(a);modal.querySelector('[data-profile-balance]').innerHTML=prettyNumber(profile.balance)+' <em>V</em>';const retry=modal.querySelector('[data-sync-profile]');retry.hidden=!a.user||a.loading||a.switching||a.status!=='offline';retry.disabled=a.loading||a.switching;modal.querySelector('[data-save-profile]').disabled=a.loading||a.switching||!gameplayWritable();modal.querySelector('[data-account-exit]').disabled=a.loading||a.switching}const message=modal.querySelector('.vh-auth-message');if(message)message.textContent=accountMessage(a);modal.querySelectorAll('[data-provider]').forEach(b=>{const v=b.dataset.provider,p=providerPresentation(v,a);b.disabled=p.disabled;b.innerHTML=`<span>${v==='google'?'G':'↗'}</span>${p.text}${p.hint?'<small>'+p.hint+'</small>':''}`})}
 document.addEventListener('vezdehot:accountchange',()=>activeDialog?.close(false));
 document.addEventListener('vezdehot:telegramready',()=>{refreshTelegramProvider();refreshAccountProviders();emit()});
-window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,toast,avatars};
+window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,serverDurakRequest,toast,avatars};
 window.addEventListener('online',()=>{if(!ownsProfile())return;if(checkpointsEnabled){if(user&&!accountSwitching)sync({pull:true});return}if(user&&!cloudHydrated&&!hydrating&&!accountSwitching){activationFlight=activate({user});activationFlight.catch(()=>{})}else queueSync()});
 document.addEventListener('visibilitychange',()=>{if(checkpointsEnabled){if(ownsProfile()&&checkpoint&&!accountSwitching)sync({pull:!document.hidden});return}if(document.hidden&&profile.dirty)sync()});
 document.addEventListener('vezdehot:sessionactive',()=>{if(checkpointsEnabled&&booted&&checkpoint&&!accountSwitching)sync({pull:true})});
