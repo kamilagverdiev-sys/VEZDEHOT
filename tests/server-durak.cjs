@@ -42,6 +42,17 @@ async function setup(options={}) {
 }
 const start=revision=>({op:'start',actionId:crypto.randomUUID(),expectedRevision:revision,bots:1,difficulty:'normal'});
 const action=(revision,type,cardId)=>({op:'action',actionId:crypto.randomUUID(),expectedRevision:revision,gameId,action:{type,...(cardId?{cardId}:{})}});
+function stateWithAction(e,wanted,bots=1){
+ for(let seed=1;seed<=8;seed++){
+  const random=seeded(seed*37+bots);let g=e.createGame({bots,id:gameId,stake:100},random);
+  for(let step=0;!g.over&&step<1000;step++){
+   const legal=e.legalActions(g);if(legal.actions.includes(wanted))return g;
+   const type=legal.actions.includes('defend')?'defend':legal.actions.includes('attack')?'attack':['finish','take','continue'].find(t=>legal.actions.includes(t));
+   g=e.applyAction(g,{type,...(['attack','defend'].includes(type)?{cardId:legal.cards[0]}:{})},random);
+  }
+ }
+ assert.fail('real games should offer '+wanted);
+}
 
 test('server rules generated from tested local rules stay byte-identical',()=>execFileSync(process.execPath,['scripts/sync-server-durak-core.cjs','--check'],{cwd:root}));
 test('server projection never exposes other hands or shuffled deck, including completed games',async()=>{
@@ -67,6 +78,18 @@ test('90 complete 2–4-player server games conserve every card and terminate wi
    assert(move.type,'server should always expose a useful action');g=applyAction(g,move,random);assertIntegrity(g);
   }
   assert(g.over,`bots ${bots} trial ${trial} should terminate`);assert(g.draw||Number.isInteger(g.loser));assert.equal(g.stake,0);
+ }
+});
+test('one finish or take is equivalent to canonical prepare then the legacy continue transition',async()=>{
+ const e=await engine,{createCore}=await import('../supabase/functions/server-durak/core.mjs');
+ for(const bots of [1,2,3])for(const type of ['finish','take']){
+  const g=stateWithAction(e,type,bots),before=clone(g),prepared=clone(g),core=createCore({random:seeded(864),id:g.id,nick:'Тест'});
+  assert(type==='finish'?core.durakPrepareRound(prepared,false):core.durakApplyResolve(prepared,true));assert.equal(prepared.phase,'roundEnd');
+  const expected=e.applyAction(prepared,{type:'continue'},seeded(864)),actual=e.applyAction(g,{type},seeded(864));
+  assert.deepEqual(actual,expected);assert.deepEqual(g,before);e.assertIntegrity(actual);
+  assert(actual.over||actual.round>g.round,'the requested round is committed');
+  const cards=[...actual.deck,...actual.players.flatMap(p=>p.hand),...actual.table.flatMap(p=>p.d?[p.a,p.d]:[p.a])];assert.equal(cards.length+actual.discardCount,36);assert.equal(new Set(cards.map(c=>c.id)).size,cards.length);
+  assert.equal(actual.journal.filter(entry=>entry.kind===(type==='take'?'take':'discard')&&entry.round===g.round).length,1);
  }
 });
 test('endpoint rejects missing, unverified and anonymous identities before private DB access',async()=>{
@@ -100,6 +123,17 @@ test('legacy spectator exit commits its earned result once and replays that exac
  const body=action(7,'resign');assert.equal((await s.handle(req(body))).status,503);assert.equal(s.store.revision,8);assert.equal(s.store.state.economy.outcome,'win');assert.equal(s.store.state.economy.payout,300);
  const retry=await(await s.handle(req(body))).json();assert.equal(retry.status,'saved');assert.equal(retry.revision,8);assert.equal(retry.game.resigned,false);assert.equal(retry.game.economy.payout,300);assert.equal(retry.game.economy.xp,80);assert.equal(s.store.receipts.size,1);assert.equal(s.calls.filter(c=>c.route.endsWith('server_durak_commit')).length,1);assert.equal((await s.handle(req(action(8,'continue')))).status,422);assert.equal(s.store.revision,8);
 });
+test('atomic take commits once and lost-ACK retry cannot take cards from the following round',async()=>{
+ const e=await engine,s=await setup({lostAck:true}),g=stateWithAction(e,'take',1);s.store.state=clone(g);s.store.revision=9;
+ const body=action(9,'take');assert.equal((await s.handle(req(body))).status,503);assert.equal(s.store.revision,10);const saved=clone(s.store.state);assert(saved.over||saved.round>g.round);
+ const retry=await(await s.handle(req(body))).json();assert.equal(retry.status,'saved');assert.equal(retry.revision,10);assert.deepEqual(s.store.state,saved);assert.equal(s.store.receipts.size,1);assert.equal(s.calls.filter(c=>c.route.endsWith('server_durak_commit')).length,1);e.assertIntegrity(saved);
+});
+test('atomic final finish commits terminal cards and paid outcome in the same single receipt',async()=>{
+ const e=await engine,s=await setup({lostAck:true}),c=rank=>({rank,suit:'♠',color:'black',id:rank+'♠'}),g=e.createGame({bots:1,id:gameId,stake:100},seeded());
+ Object.assign(g,{deck:[],table:[{a:c('7'),d:c('8')}],discardCount:33,phase:'resolve',attacker:0,defender:1,finished:[],roundLimit:6,resolve:{took:false},pendingRound:null});g.players[0].hand=[];g.players[1].hand=[c('6')];e.assertIntegrity(g);s.store.state=g;s.store.revision=12;
+ const body=action(12,'finish');assert.equal((await s.handle(req(body))).status,503);assert.equal(s.store.revision,13);assert(s.store.state.over);assert.equal(s.store.state.discardCount,35);assert.equal(s.store.state.economy.payout,200);assert.equal(s.store.state.economy.xp,80);
+ const retry=await(await s.handle(req(body))).json();assert.equal(retry.status,'saved');assert(retry.game.over);assert.equal(retry.game.economy.settled,true);assert.equal(s.store.receipts.size,1);assert.equal(s.calls.filter(c=>c.route.endsWith('server_durak_commit')).length,1);assert.equal((await s.handle(req(action(13,'continue')))).status,422);assert.equal(s.store.revision,13);
+});
 test('foreign table ID is rejected without mutation; restart keeps revision monotonic',async()=>{
  const s=await setup();await s.handle(req(start(0)));
  assert.equal((await s.handle(req({...action(1,'resign'),gameId:crypto.randomUUID()}))).status,422);assert.equal(s.store.revision,1);
@@ -121,8 +155,7 @@ test('paid Durak settles every terminal outcome from the real round transition',
   Object.assign(g,{deck:[],table:[{a:c('7'),d:c('8')}],discardCount:outcome==='draw'?34:33,phase:'resolve',attacker:0,defender:1,finished:[],roundLimit:6,resolve:{took:false},pendingRound:null});
   g.players.forEach(p=>p.hand=[]);if(outcome!=='draw')g.players[outcome==='loss'?0:1].hand=[c('6')];
   e.assertIntegrity(g);assert.equal(g.economy.settled,false);
-  g=e.applyAction(g,{type:'finish'},seeded());assert.equal(g.economy.settled,false);
-  g=e.applyAction(g,{type:'continue'},seeded());assert(g.over);e.assertIntegrity(g);
+  g=e.applyAction(g,{type:'finish'},seeded());assert(g.over);e.assertIntegrity(g);
   assert.deepEqual(g.economy,{version:1,stake:100,settled:true,payout:outcome==='win'?100*(bots+1):outcome==='draw'?100:0,xp:{win:80,draw:40,loss:25}[outcome],outcome});
   assert.deepEqual(e.projectGame(g).economy,g.economy);
   assert.throws(()=>e.applyAction(g,{type:'continue'}),{code:'illegal_action'});

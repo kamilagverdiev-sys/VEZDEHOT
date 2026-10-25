@@ -83,8 +83,8 @@ export function applyAction(state, action, random=secureRandom) {
   switch(action.type) {
     case 'attack': changed=core.durakApplyAttack(g,0,g.players[0].hand.findIndex(c=>c.id===action.cardId));break;
     case 'defend': changed=core.durakApplyDefense(g,0,g.players[0].hand.findIndex(c=>c.id===action.cardId));break;
-    case 'take': changed=core.durakApplyResolve(g,true);break;
-    case 'finish': changed=core.durakPrepareRound(g,false);break;
+    case 'take': changed=core.durakApplyResolve(g,true)&&core.durakCommitRound(g);break;
+    case 'finish': changed=core.durakPrepareRound(g,false)&&core.durakCommitRound(g);break;
     case 'continue': changed=g.finished.includes(0)?true:g.phase==='roundEnd'?core.durakCommitRound(g):core.durakContinueResolve(g);break;
     case 'resign': g.over=true;g.phase='over';g.resigned=true;g.draw=false;g.winner=null;g.loser=0;g.message='Ты завершил серверную партию. Можно открыть новый стол.';changed=true;break;
   }

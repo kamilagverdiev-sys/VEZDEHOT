@@ -65,7 +65,26 @@ for (let bots=1;bots<=3;bots++) for(const diff of ['easy','normal','hard']) for(
   assert(actions<3000);maxActions=Math.max(maxActions,actions);fullGames++;
   const totals=JSON.stringify(h.state());h.run('settle(s.game);settle(s.game)');assert.equal(JSON.stringify(h.state()),totals,'settlement only once');
 }
-// Resolve and roundEnd are stable until an explicit user action, including repeated advance calls.
+// Human finish/take combine the same canonical prepare + commit without saving
+// an intermediate confirmation screen. Bot/legacy review remains supported.
+for(const bots of [1,2,3])for(const type of ['finish','take']){
+  const combined=harness(125+bots),previous=harness(125+bots);
+  const setup=`startGame({bots:${bots},diff:'hard',stake:0});clearDurakTimer();{
+    const g=s.game,pool=deck(),pick=id=>pool.splice(pool.findIndex(c=>c.id===id),1)[0];
+    g.id='atomic-${bots}-${type}';g.table=[{a:pick('6♠'),d:${type==='finish'?"pick('7♠')":'null'}}];
+    g.attacker=${type==='finish'?0:1};g.defender=${type==='finish'?1:0};
+    g.players.forEach((p,i)=>p.hand=pool.splice(0,6-(i===g.attacker||${type==='finish'?'i===g.defender':'false'}?1:0)));
+    g.deck=pool;g.discardCount=0;g.finished=[];g.phase='${type==='finish'?'resolve':'defend'}';g.resolve=${type==='finish'?'{took:false,prepared:false}':'null'};g.roundLimit=6;g.journal=[];
+  }`;
+  combined.run(setup);previous.run(setup);check(combined);check(previous);
+  const saves=[];combined.context.save=()=>saves.push(JSON.parse(JSON.stringify(combined.state().game)));
+  previous.run(type==='finish'?'endRound(s.game,false);continueRound()':'showResolve(s.game,true);continueRound()');
+  combined.run(type==='finish'?'finishAttack()':'humanTake()');
+  assert.equal(JSON.stringify(combined.state().game),JSON.stringify(previous.state().game),'same card movement, draw order, next actor and journal as old two-step flow');
+  check(combined);assert.equal(saves.length,1,'one saved transition');assert(saves.every(g=>g.phase!=='roundEnd'&&g.pendingRound===null));
+  const frozen=JSON.stringify(combined.state().game);combined.run(type==='finish'?'finishAttack()':'humanTake()');assert.equal(JSON.stringify(combined.state().game),frozen,'stale second click cannot transfer again');assert.equal(saves.length,1);
+}
+// Resolve and bot-produced roundEnd are stable until an explicit user action.
 {
   const h=harness(14);h.run("startGame({bots:2,diff:'hard',stake:0});clearDurakTimer();s.game.attacker=0;s.game.defender=1;s.game.table=[{a:s.game.players[0].hand.pop(),d:null}];s.game.phase='defend';showResolve(s.game,true)");
   const g=h.state().game,handSize=g.players[1].hand.length;
