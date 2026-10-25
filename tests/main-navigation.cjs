@@ -27,4 +27,27 @@ test('an actual theme button changes the theme once without binding the document
 test('the fixture catches the original ancestor handler detaching a clicked summary',()=>{
   const h=harness(false,source.replace("$('button[data-theme]')","$('[data-theme]')"));h.bind();h.click(h.summary);assert.equal(h.calls.render,1);assert.equal(h.summary.isConnected,false);
 });
+const navigation=html.split('// MAIN_NAVIGATION_START')[1].split('// MAIN_NAVIGATION_END')[0].split('\n').slice(1).join('\n');
+function navigationHarness(){
+  const calls=[],nodes=new Map(),document={activeElement:null},window={scrollY:0,scrollTo(options){calls.push({scroll:options.top});this.scrollY=options.top}},state={view:'lobby'};
+  const element=(kind,extra={})=>({kind,tabIndex:-1,setAttribute(){},closest:()=>null,focus(options){document.activeElement=this;calls.push({focus:kind,preventScroll:options?.preventScroll})},...extra});
+  const heading=element('heading'),app=element('app',{contains:node=>node?.inApp===true,querySelector:selector=>selector==='h1'?heading:nodes.get(selector)||null});
+  const ctx={s:state,document,window,Number,Math};vm.createContext(ctx);vm.runInContext(navigation+'\nthis.begin=beginMainNavigation;this.finish=finishMainNavigation;',ctx);
+  return {calls,nodes,document,window,state,element,heading,render(){ctx.finish(app,ctx.begin(app))}};
+}
+test('new local screens reset scroll once, while ordinary rerenders preserve an active control',()=>{
+  const h=navigationHarness();h.window.scrollY=820;h.render();assert.equal(h.calls.length,0,'initial load must not reset browser position');
+  h.state.view='room';h.render();assert.deepEqual(h.calls,[{focus:'heading',preventScroll:true},{scroll:0}]);
+  const select=h.element('select',{inApp:true});h.document.activeElement=select;h.window.scrollY=330;h.calls.length=0;h.render();assert.equal(h.document.activeElement,select);assert.equal(h.window.scrollY,330);assert.equal(h.calls.length,0);
+  h.state.view='bunker';h.render();assert.equal(h.window.scrollY,0);assert.equal(h.document.activeElement,h.heading);
+});
+test('returning to lobby restores its scroll and the new card control, not a detached element',()=>{
+  const h=navigationHarness(),article={dataset:{clubGame:'bunker'}},old=h.element('old-card',{inApp:true,closest:selector=>selector==='[data-club-game]'?article:null});h.render();h.window.scrollY=1450;h.document.activeElement=old;
+  h.state.view='room';h.render();h.state.view='bunker';h.render();
+  const replacement=h.element('new-card',{inApp:true,tabIndex:0});h.nodes.set('[data-club-game="bunker"] .club-game-open',replacement);h.state.view='lobby';h.render();assert.equal(h.document.activeElement,replacement);assert.equal(h.window.scrollY,1450);assert.notEqual(h.document.activeElement,old);
+});
+test('saved-session launch restores its shelf button and missing lobby controls fall back to a heading',()=>{
+  const h=navigationHarness();h.render();h.document.activeElement=h.element('resume',{inApp:true,dataset:{clubResume:'durak'}});h.window.scrollY=400;h.state.view='game';h.render();const replacement=h.element('new-resume',{inApp:true,tabIndex:0});h.nodes.set('[data-club-resume="durak"]',replacement);h.state.view='lobby';h.render();assert.equal(h.document.activeElement,replacement);assert.equal(h.window.scrollY,400);
+  h.state.view='room';h.render();h.nodes.clear();h.state.view='lobby';h.render();assert.equal(h.document.activeElement,h.heading);
+});
 console.log(count+' main navigation checks passed');

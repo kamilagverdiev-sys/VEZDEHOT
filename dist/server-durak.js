@@ -91,6 +91,7 @@ function statusText(g){
   if(g.over)return resultSummary(g).title;
   if(view.busy)return 'Подтверждаем ход…';
   if(view.phase==='offline')return 'Ждём подтверждения';
+  if(g.finished.includes(0))return 'Ты вышел без карт';
   if(g.legal.actions.includes('defend'))return 'Твоя защита';
   if(g.legal.actions.includes('take'))return 'Можно забрать карты';
   if(g.legal.actions.includes('attack'))return g.table.length?'Можно подкинуть':'Твой ход';
@@ -99,12 +100,14 @@ function statusText(g){
 function actionButton(action,label,primary=false){return `<button class="sd-button ${primary?'primary':''}" data-action="${action}" ${!gate()||!view.ready?'disabled':''}>${label}</button>`;}
 function controls(g){
   if(!view.ready)return `<button class="sd-button primary" data-retry ${view.busy||!gate()?'disabled':''}>${view.busy?'Подтверждаем…':view.pending?'Повторить этот запрос':'Загрузить стол'}</button>`;
+  if(g.finished.includes(0))return g.legal.actions.includes('continue')?actionButton('continue','Завершить партию ботов',true):'<button class="sd-button primary" data-retry>Обновить итог партии</button>';
   const actions=g.legal.actions,move=actions.includes('defend')?'defend':actions.includes('attack')?'attack':null;
   return `${move?`<button class="sd-button primary" data-play="${move}" ${!selected||!gate()?'disabled':''}>${move==='defend'?'Отбить':'Положить'}${selected?' '+esc(selected):' карту'}</button>`:''}${actions.includes('take')?actionButton('take','Забрать карты'):''}${actions.includes('finish')?actionButton('finish','Бито · дальше',!move):''}${actions.includes('continue')?actionButton('continue',g.phase==='roundEnd'?'Следующий раунд →':'Продолжить атаку →',true):''}`;
 }
 function playHelp(g){
   if(view.busy)return 'Сохраняем ход. Карты обновятся после подтверждения.';
   if(!view.ready)return 'Восстанови связь кнопкой выше, чтобы продолжить эту партию.';
+  if(g.finished.includes(0))return 'Твои ходы закончены. Сервер доиграет оставшихся ботов по обычным правилам и сохранит итог этой партии.';
   if(g.legal.actions.includes('defend'))return 'Перетащи карту на стол или выбери её и нажми «Отбить». На решение нет таймера.';
   if(g.legal.actions.includes('attack'))return 'Перетащи карту на стол или выбери её и нажми «Положить». На решение нет таймера.';
   if(g.legal.actions.includes('continue'))return g.phase==='roundEnd'?'Заход завершён. Следующий раунд продолжит эту же партию.':'Карта отбита. Нажми «Продолжить атаку», чтобы увидеть следующие ходы.';
@@ -112,6 +115,7 @@ function playHelp(g){
   return 'Если отбиться нечем, забери карты. Партия продолжится за этим же столом.';
 }
 function handHint(g){
+  if(g.finished.includes(0))return 'Твои ходы закончены';
   if(selected)return 'Выбрана '+selected;
   if(g.legal.cards.length)return g.players[0].hand.length>7?'Листай карты вбок':'Светлые карты можно сыграть';
   if(g.legal.actions.includes('take'))return 'Нет карты для защиты';
@@ -153,7 +157,7 @@ function restoreTableView(app,key,memory){
   if(memory.focusCard){const card=[...app.querySelectorAll('[data-card]')].find(node=>node.dataset.card===memory.focusCard);if(card&&!card.disabled)card.focus({preventScroll:true});}
   else if(memory.focusSetup){const field=[...app.querySelectorAll('[data-setup]')].find(node=>node.id===memory.focusSetup);if(field&&!field.disabled)field.focus({preventScroll:true});}
 }
-function tableNotes(g){return `<details class="sd-rules" data-rules><summary>Правила этого стола</summary><p>В колоде 36 карт. Старшая карта той же масти отбивает младшую; козырь отбивает другую масть. Козырь можно отбить только старшим козырем.</p><p>Атакующий подкидывает карты того же достоинства, что уже есть на столе. В одном заходе не больше шести атак и не больше карт, чем было у защитника в начале захода.</p><p>Если отбиться нечем, забери карты. После завершения захода игроки добирают до шести. Когда колода пуста, освободи руку: последний игрок с картами проигрывает.</p></details><details class="sd-journal" data-journal><summary>История ходов <span>${g.journal.length}</span></summary><ol>${journal(g)}</ol></details><footer class="sd-footer">${!g.over?`<p>Чтобы продолжить на другом устройстве, дождись статуса «Ходы сохранены» и войди там в тот же аккаунт.</p><button class="sd-link" data-resign ${!writable()?'disabled':''}>Завершить этот стол</button>`:''}<a class="sd-link" href="./index.html">Все игры →</a></footer>`;}
+function tableNotes(g){return `<details class="sd-rules" data-rules><summary>Правила этого стола</summary><p>В колоде 36 карт. Старшая карта той же масти отбивает младшую; козырь отбивает другую масть. Козырь можно отбить только старшим козырем.</p><p>Атакующий подкидывает карты того же достоинства, что уже есть на столе. В одном заходе не больше шести атак и не больше карт, чем было у защитника в начале захода.</p><p>Если отбиться нечем, забери карты. После завершения захода игроки добирают до шести. Когда колода пуста, освободи руку: последний игрок с картами проигрывает. После твоего выхода оставшиеся боты доигрывают автоматически.</p></details><details class="sd-journal" data-journal><summary>История ходов <span>${g.journal.length}</span></summary><ol>${journal(g)}</ol></details><footer class="sd-footer">${!g.over?`<p>Чтобы продолжить на другом устройстве, дождись статуса «Ходы сохранены» и войди там в тот же аккаунт.</p>${!g.finished.includes(0)?`<button class="sd-link" data-resign ${!writable()?'disabled':''}>Завершить этот стол</button>`:''}`:''}<a class="sd-link" href="./index.html">Все игры →</a></footer>`;}
 function render(focusCard){
   stopGestures();
   const app=$('#app');if(!app)return;const a=window.VEZDEHOT?.account(),g=view.game,key=a?.user?[a.user.id,g?.id||'setup'].join('|'):'',memory=captureTableView(app,key);
@@ -170,7 +174,7 @@ function render(focusCard){
     const seat=i+1,active=!g.over&&((g.phase==='defend'&&g.defender===seat)||(g.phase==='attack'&&g.attacker===seat)),finished=g.finished.includes(seat);
     return `<article class="sd-player ${active?'active':''} ${finished?'finished':''}"><div class="sd-seat"><span class="sd-avatar" aria-hidden="true">${esc(p.face||'♟')}</span><span class="sd-card-count" aria-label="${p.handCount} карт">${p.handCount}</span></div><b>${esc(p.name)}</b><small>${finished?'Без карт':g.defender===seat?'Защищается':g.attacker===seat?'Атакует':'За столом'}</small><span class="sd-hidden" aria-hidden="true"><i></i><i></i><i></i></span></article>`;
   }).join('');
-  const board=g.table.length?g.table.map((p,i)=>`<div class="sd-pair ${p.d?'beaten':'unbeaten'}" aria-label="Пара ${i+1}${p.d?', отбита':', нужно отбить'}"><span class="sd-pair-number">${i+1}</span>${cardFace(p.a,'attack')}${p.d?cardFace(p.d,'defence'):'<span class="sd-wait" aria-hidden="true">↗</span>'}</div>`).join(''):'<div class="sd-empty-table"><span aria-hidden="true">♠</span><b>Твой следующий ход</b><small>Сыгранные карты — здесь</small></div>';
+  const board=g.table.length?g.table.map((p,i)=>`<div class="sd-pair ${p.d?'beaten':'unbeaten'}" aria-label="Пара ${i+1}${p.d?', отбита':', нужно отбить'}"><span class="sd-pair-number">${i+1}</span>${cardFace(p.a,'attack')}${p.d?cardFace(p.d,'defence'):'<span class="sd-wait" aria-hidden="true">↗</span>'}</div>`).join(''):`<div class="sd-empty-table"><span aria-hidden="true">♠</span><b>${g.finished.includes(0)?'Боты завершают партию':'Твой следующий ход'}</b><small>Сыгранные карты — здесь</small></div>`;
   const cards=g.players[0].hand,fan=cards.length<=7,center=(cards.length-1)/2;
   const hand=cards.map((c,i)=>`<button class="sd-hand-card ${selected===c.id?'selected':''}" data-card="${esc(c.id)}" style="--angle:${fan?(i-center)*2:0}deg;--lift:${fan?Math.abs(i-center)*1.8:0}px;--order:${i}" aria-pressed="${selected===c.id}" aria-label="${esc(c.rank+' '+c.suit)}${legal.has(c.id)?', можно сыграть':', сейчас недоступна'}" ${!writable()||!legal.has(c.id)?'disabled':''}>${cardFace(c)}</button>`).join('');
   const handArea=!g.over?`<div class="sd-control"><div class="sd-turn" role="status"><span class="sd-turn-dot" aria-hidden="true"></span><div><h1>${statusText(g)}</h1><p>${esc(g.message)}</p></div></div><div class="sd-hand-label"><b>Твоя рука <span>${cards.length}</span></b><span>${esc(handHint(g))}</span></div><div class="sd-hand ${fan?'fan':'many'}" aria-label="Твои карты">${hand||'<p class="sd-hand-empty">Ты вышел без карт</p>'}</div><div class="sd-actions">${controls(g)}</div><p class="sd-help">${playHelp(g)}</p></div>`:'';

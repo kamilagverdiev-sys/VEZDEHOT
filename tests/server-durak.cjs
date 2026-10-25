@@ -94,6 +94,12 @@ test('lost acknowledgement retry returns original receipt even after later actio
  const old=await(await s.handle(req(body))).json();assert.deepEqual(old,first);assert.equal(s.store.revision,2);
  const latest=await(await s.handle(req({op:'load'}))).json();assert.equal(latest.revision,2);assert(latest.game.over);
 });
+test('legacy spectator exit commits its earned result once and replays that exact result after a lost ACK',async()=>{
+ const e=await engine,s=await setup({lostAck:true}),c=(rank,suit='♠')=>({rank,suit,id:rank+suit,color:['♥','♦'].includes(suit)?'red':'black'}),g=e.createGame({bots:2,id:gameId,stake:100},seeded());
+ Object.assign(g,{deck:[],trump:'♥',trumpCard:c('A','♥'),table:[],discardCount:33,attacker:1,defender:2,phase:'attack',finished:[0],roundLimit:null,resolve:null,pendingRound:null});g.players[0].hand=[];g.players[1].hand=[c('6')];g.players[2].hand=[c('7'),c('8','♦')];e.assertIntegrity(g);s.store.state=g;s.store.revision=7;
+ const body=action(7,'resign');assert.equal((await s.handle(req(body))).status,503);assert.equal(s.store.revision,8);assert.equal(s.store.state.economy.outcome,'win');assert.equal(s.store.state.economy.payout,300);
+ const retry=await(await s.handle(req(body))).json();assert.equal(retry.status,'saved');assert.equal(retry.revision,8);assert.equal(retry.game.resigned,false);assert.equal(retry.game.economy.payout,300);assert.equal(retry.game.economy.xp,80);assert.equal(s.store.receipts.size,1);assert.equal(s.calls.filter(c=>c.route.endsWith('server_durak_commit')).length,1);assert.equal((await s.handle(req(action(8,'continue')))).status,422);assert.equal(s.store.revision,8);
+});
 test('foreign table ID is rejected without mutation; restart keeps revision monotonic',async()=>{
  const s=await setup();await s.handle(req(start(0)));
  assert.equal((await s.handle(req({...action(1,'resign'),gameId:crypto.randomUUID()}))).status,422);assert.equal(s.store.revision,1);

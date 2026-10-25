@@ -6,7 +6,7 @@ const inline = html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
 const PROFILE = 'poker-test-profile', SESSION = 'vezdehot_poker_v2_guest';
 const plain = value => JSON.parse(JSON.stringify(value));
 
-async function harness({ store = new Map(), failRecord = false, scope = 'guest', sharedStore = true, failStorage = false, owner = true, guide = true } = {}) {
+async function harness({ store = new Map(), failRecord = false, failDebit = false, scope = 'guest', sharedStore = true, failStorage = false, owner = true, guide = true } = {}) {
   const events = new Map(), groups = new Map(), timers = new Map();
   let nextTimer = 0, seed = 88091, renderCount = 0, recordCalls = 0, profileOpens = 0, guideConfig = null, guideOpens = 0;
   const initial = { nick: 'Игрок', balance: 10000, games: 0, wins: 0, xp: 0, resultIds: [], history: [] };
@@ -19,7 +19,7 @@ async function harness({ store = new Map(), failRecord = false, scope = 'guest',
   const platform = {
     ready: Promise.resolve(), scopeKey: () => scope,
     getProfile: () => plain(profile),
-    updateProfile(patch) { profile = { ...profile, ...plain(patch) }; persistProfile(); },
+    updateProfile(patch) { if (failDebit) return {ok:false}; profile = { ...profile, ...plain(patch) }; persistProfile(); },
     recordResult(entry) {
       recordCalls++;
       if (failRecord === 'return') return { ok: false };
@@ -55,7 +55,7 @@ render = function () { document.rendered = saveNotice() + (g ? controls() : intr
 window.__poker = { get g() { return g; }, get error() { return error; }, get accountChanging() { return accountChanging; },
   startHand, nextHand, closeTable, syncResult, commitUI, saveHand, saveNotice, controls, notice, bind, boot, takeAction, continueHand, togglePause, canPlay,
   pokerNewGame, pokerAction, pokerFinish, pokerContinue, legalActions, tableFinished,
-  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, pokerOpponents, pokerBotStyle, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
+  resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, top, practiceBalance, pokerOpponents, pokerBotStyle, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
   vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context);
@@ -67,7 +67,7 @@ boot();`;
   vm.runInContext(inline.replace('\nboot();\n', '\n' + exposure + '\n'), context, { filename: 'poker.html' });
   await Promise.resolve(); await Promise.resolve();
   return {
-    api: context.window.__poker, context, store, timers, app, groups,
+    api: context.window.__poker, context, store, timers, app, groups, selectors,
     profile: () => plain(profile), output: () => document.rendered, recordCalls: () => recordCalls,
     renderCount: () => renderCount, profileOpens: () => profileOpens, guideConfig: () => guideConfig, guideOpens: () => guideOpens, rules, closeGuide() { guideConfig?.onClose?.(); },
     setFailRecord(value) { failRecord = value; },
@@ -99,6 +99,19 @@ async function test(name, fn) { await fn(); count++; console.log('PASS ' + name)
     assert.equal(h.profile().balance, 9900); assert.equal(h.api.g.version, 3); assert.equal(h.api.g.handNumber, 1);
     h.click('[data-start]'); h.click('[data-new]');
     assert.equal(h.api.g.id, id); assert.equal(h.profile().balance, 9900); assert.equal(h.profile().games, 0);
+  });
+  await test('a refused entry debit cannot create a table or consume practice coins', async () => {
+    const h=await harness({failDebit:true}),before=h.profile();h.click('[data-start]');
+    assert.equal(h.api.g,null);assert.deepEqual(h.profile(),before);assert.equal(h.recordCalls(),0);assert.equal(h.timers.size,0);assert.match(h.api.error,/сохранить вход/);
+    assert.equal(h.store.has(SESSION),false);h.click('[data-start]');assert.equal(h.api.g,null);assert.deepEqual(h.profile(),before);
+  });
+  await test('practice balance stays clearly labelled after profile updates without losing its coin markup', async () => {
+    const h=await harness(),attributes={},balance={setAttribute:(key,value)=>attributes[key]=value};h.selectors.set('.pk-bankroll',balance);assert.match(h.api.top(),/Баланс практики/);assert.match(h.api.top(),/>Практика</);
+    h.setProfile({balance:7654});h.dispatch('vezdehot:profile');assert.match(balance.innerHTML,/>Практика</);assert.match(balance.innerHTML,/<i aria-hidden="true">V<\/i>/);assert.equal(attributes['aria-label'],'Баланс практики: '+Number(7654).toLocaleString('ru-RU')+' игровых монет');
+  });
+  await test('primary decisions precede the equity explanation so mobile actions stay close to the hand', async () => {
+    const h=await harness();h.click('[data-start]');let steps=0;while(h.api.g.toAct!==0&&steps++<10){const legal=h.api.legalActions(h.api.g,h.api.g.toAct);h.api.pokerAction(h.api.g,h.api.g.toAct,legal.check?'check':'call')}
+    const markup=h.api.view();assert(markup.indexOf('class="pk-actions"')<markup.indexOf('class="pk-equity"'));assert.match(markup,/Победа без дележа/);assert.match(markup,/data-action="(?:check|call)"/);
   });
   await test('next hand preserves the table, every stack and wallet without another setup or fee', async () => {
     const h = await harness(); h.click('[data-start]'); const first = finishWithHumanWinner(h);

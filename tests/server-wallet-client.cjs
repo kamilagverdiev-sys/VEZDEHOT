@@ -107,10 +107,10 @@ test('guest and readonly markup do not offer a usable bonus action or misleading
 });
 
 function runtime(request){
- const listeners=new Map(),store=memory();let userId=SCOPE,writable=true;
+ const listeners=new Map(),store=memory(),intervals=[];let userId=SCOPE,writable=true,clock=0;
  const document={hidden:false,addEventListener:(name,fn)=>{if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn)}},window={localStorage:store,addEventListener:()=>{},VEZDEHOT_TAB_SESSION:{canWrite:()=>writable},VEZDEHOT:{ready:Promise.resolve(),account:()=>({user:userId?{id:userId}:null,loading:false,switching:false,authPending:false}),scopeKey:()=>userId||'guest',serverWalletRequest:request}};
- const context={window,document,crypto:{randomUUID:()=>ID},performance:{now:()=>0},setInterval:()=>1,Object,JSON,Number,Set,Map,Error,Promise,Date};vm.createContext(context);vm.runInContext(source,context);
- return {api:window.VEZDEHOT_SERVER_WALLET,document,store,dispatch:name=>{for(const fn of listeners.get(name)||[])fn()},account:id=>{userId=id},writable:value=>{writable=value}};
+ const context={window,document,crypto:{randomUUID:()=>ID},performance:{now:()=>clock},setInterval:fn=>intervals.push(fn),Object,JSON,Number,Set,Map,Error,Promise,Date};vm.createContext(context);vm.runInContext(source,context);
+ return {api:window.VEZDEHOT_SERVER_WALLET,document,store,dispatch:name=>{for(const fn of listeners.get(name)||[])fn()},account:id=>{userId=id},writable:value=>{writable=value},tick(ms=30000){clock+=ms;intervals.forEach(fn=>fn())}};
 }
 
 test('profile renders and subscribers do not cause a wallet refetch loop',async()=>{
@@ -121,4 +121,23 @@ test('runtime clears private balance immediately on account and tab changes, the
  const resolvers=[],r=runtime(()=>new Promise(resolve=>resolvers.push(resolve)));await flush();resolvers.shift()(response(7,{balance:1300}));await flush();assert.equal(r.api.status().wallet.balance,1300);
  const oldRefresh=r.api.refresh();r.dispatch('vezdehot:accountchange');assert.equal(r.api.status().wallet,null);r.account(OTHER);r.dispatch('vezdehot:profile');assert.equal(resolvers.length,2);resolvers[1](response(1,{balance:1000}));await flush();resolvers[0](response(8,{balance:2300}));await oldRefresh;assert.equal(r.api.status().wallet.balance,1000);assert.equal(r.api.status().wallet.revision,1);
  r.writable(false);r.dispatch('vezdehot:sessionpause');assert.equal(r.api.status().wallet,null);assert.equal(r.api.status().phase,'readonly');r.account(null);r.dispatch('vezdehot:profile');assert.equal(r.api.status().phase,'guest');assert.equal(r.api.status().wallet,null);
+});
+
+function walletHost(document){
+ const body={kind:'body'},host={isConnected:true,dataset:{walletExpanded:'true'},ownerDocument:document,onclick:null,replacements:0},nodes=new Map();let detail={open:true};document.activeElement=body;
+ host.contains=node=>[...nodes.values()].includes(node);
+ host.querySelector=selector=>{if(selector==='.sw-card')return detail;if(selector==='.sw-card summary')return nodes.get('summary');const match=selector.match(/^\[(data-wallet-[a-z]+)\]/),node=match&&nodes.get(match[1]);return node&&(!selector.includes(':not')||!node.disabled)?node:null};
+ Object.defineProperty(host,'innerHTML',{set(markup){if(host.contains(document.activeElement))document.activeElement=body;host.replacements++;nodes.clear();detail={open:/<details[^>]*\sopen(?:\s|>)/.test(markup)};const add=(name,disabled=false)=>nodes.set(name,{kind:name,disabled,hasAttribute:attribute=>attribute===name,focus(){document.activeElement=this}});add('summary');for(const match of markup.matchAll(/<button\b[^>]*\b(data-wallet-[a-z]+)\b([^>]*)>/g))add(match[1],/\bdisabled\b/.test(match[2]));}});
+ return {host,body,summary:()=>nodes.get('summary'),button:name=>nodes.get(name)};
+}
+test('wallet timer skips identical markup and preserves summary focus when countdown changes',async()=>{
+ const r=runtime(async()=>response(1,{bonusAvailableAt:'2026-10-25T12:02:00.000Z'}));await flush();const h=walletHost(r.document);r.api.mount(h.host);const summary=h.summary();summary.focus();
+ r.tick(30000);assert.equal(h.host.replacements,1);assert.equal(h.summary(),summary);assert.equal(r.document.activeElement,summary);
+ r.tick(31000);assert.equal(h.host.replacements,2);assert.notEqual(h.summary(),summary);assert.equal(r.document.activeElement,h.summary());assert.equal(h.host.querySelector('.sw-card').open,true);
+ const replacements=h.host.replacements;r.tick(1);assert.equal(h.host.replacements,replacements);
+});
+test('wallet refresh keeps a summary or action fallback focused and never steals outside focus',async()=>{
+ const r=runtime(async()=>response());await flush();const h=walletHost(r.document);r.api.mount(h.host);h.summary().focus();await r.api.refresh();assert.equal(r.document.activeElement,h.summary());
+ h.button('data-wallet-claim').focus();await r.api.refresh();assert.equal(r.document.activeElement,h.summary(),'disappearing or disabled action falls back to the disclosure');
+ r.document.activeElement=h.body;await r.api.refresh();assert.equal(r.document.activeElement,h.body);
 });

@@ -137,4 +137,20 @@ test('migrating legacy ballots never invents a no-elimination outcome for the fa
   const facts = next.run('playerVoteFacts()'); assert.equal(facts.rows.length, 1); assert.equal(facts.rows[0].round, 2);
   assert.equal(facts.rows[0].eliminated, undefined); assert.equal(next.context.g.voteHistory[0].eliminated, undefined);
 });
+test('rejected entry leaves setup or the completed result intact and does not create a game', () => {
+ for(const rejected of [false,{ok:false,persisted:false}])for(const completed of [false,true]){
+  const h=harness();if(completed){h.fixture();h.run('endGame("town","Город победил.")');}
+  const previous=h.context.g,coins=h.profile.balance,before=JSON.stringify([...h.data]);h.context.VEZDEHOT.updateProfile=()=>rejected;h.run('start()');
+  assert.equal(h.context.g,previous);assert.equal(h.profile.balance,coins);assert.equal(JSON.stringify([...h.data]),before);
+ }
+});
+test('an accepted in-memory entry remains one entry when durable profile storage is unavailable', () => {
+ const h=harness();let charges=0;h.context.VEZDEHOT.updateProfile=patch=>{charges++;Object.assign(h.profile,patch);return {ok:true,persisted:false}};
+ h.run('start()');const id=h.context.g.id;assert.equal(h.profile.balance,9900);h.run('start()');assert.equal(h.context.g.id,id);assert.equal(charges,1);assert.equal(h.profile.balance,9900);
+});
+test('spectated pending result survives reload and retries settlement without another bot decision or entry', () => {
+ const h=harness();h.fixture();h.context.g.players[0].alive=false;h.failResults(true);const coins=h.profile.balance;assert.equal(h.run('finishSpectating()'),true);assert.equal(h.context.g.over,true);assert.equal(h.context.g.settled,false);assert.equal(h.profile.balance,coins);
+ const id=h.context.g.id,ballots=JSON.stringify(h.context.g.voteHistory),next=harness(h.data,h.profile);next.run('restore()');assert.equal(next.context.g.id,id);assert.equal(next.context.g.settled,true);assert.equal(JSON.stringify(next.context.g.voteHistory),ballots);assert.equal(next.recordings(),1);
+ const again=harness(next.data,next.profile);again.run('restore()');assert.equal(again.recordings(),0);assert.equal(again.profile.games,1);
+});
 console.log(`${count} Mafia storage integration checks passed`);

@@ -97,3 +97,8 @@ body{background:radial-gradient(ellipse at 50% 0,#65402760,transparent 65%),repe
  .pk-controls:has(.pk-recap){position:static;width:100%;max-width:none}
  .pk-controls:has(.pk-recap) .pk-recap{margin-top:10px}
 }
+.pk-bankroll .pk-practice-balance{display:flex;flex-direction:column;align-items:flex-end;gap:1px;margin:0;color:inherit;font:inherit;line-height:1.15}.pk-practice-balance small{font-size:8px;color:#cdbb99;font-weight:500;letter-spacing:.03em}.pk-practice-balance b{font:inherit;font-weight:650}
+/* Keep the primary decision immediately after the turn notice on small screens. */
+.pk-controls>.pk-equity{margin:14px 0 0}
+@media(max-width:600px){.pk-controls>.pk-equity{margin-top:12px}}
+@media(max-width:600px){.pk-equity summary{width:44px;min-height:44px}.pk-equity-main{padding-right:42px}}

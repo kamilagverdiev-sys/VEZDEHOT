@@ -106,9 +106,12 @@ function status(){return {...view,wallet:view.wallet?clone(view.wallet):null};}
 function renderHost(root,entry){
   if(!root.isConnected){root.onclick=null;mounts.delete(root);return;}
   const opened=root.querySelector('.sw-card')?.open??entry.opened,focused=root.ownerDocument?.activeElement;
-  const focusAction=focused&&root.contains(focused)?['data-wallet-login','data-wallet-claim','data-wallet-refresh'].find(name=>focused.hasAttribute?.(name)):null;
-  root.innerHTML=walletMarkup(view,opened);entry.opened=opened;
-  if(focusAction)root.querySelector('['+focusAction+']')?.focus?.({preventScroll:true});
+  const markup=walletMarkup(view,opened);entry.opened=opened;
+  if(entry.markup===markup)return;
+  const focusSummary=focused===root.querySelector('.sw-card summary'),focusAction=focused&&root.contains(focused)?['data-wallet-login','data-wallet-claim','data-wallet-refresh'].find(name=>focused.hasAttribute?.(name)):null;
+  root.innerHTML=markup;entry.markup=markup;
+  if(focusSummary)root.querySelector('.sw-card summary')?.focus?.({preventScroll:true});
+  else if(focusAction)(root.querySelector('['+focusAction+']:not([disabled])')||root.querySelector('.sw-card summary'))?.focus?.({preventScroll:true});
 }
 function emit(){for(const [root,entry] of mounts)renderHost(root,entry);for(const fn of subscribers){try{fn(status())}catch{}}}
 function clear(phase='loading'){

@@ -321,6 +321,37 @@ test('a night ending labels prior statements and ballots by their actual round a
   assert.equal(run('voteCount(1)'), '1 голос'); assert.equal(run('voteCount(2)'), '2 голоса'); assert.equal(run('voteCount(5)'), '5 голосов'); assert.equal(run('voteCount(11)'), '11 голосов');
 });
 
+test('dead players can finish spectating or keep advancing manually; live and paused players cannot', () => {
+ const g=fixture('civilian');g.phase='dawn';g.nightText='Все встретили рассвет.';assert.ok(!run('phasePanel()').includes('data-finish-spectating'));
+ g.players[0].alive=false;const output=run('phasePanel()');assert.match(output,/data-finish-spectating/);assert.match(output,/data-begin-day/);assert.match(output,/Боты доиграют эту партию/);
+ context.paused=true;assert.ok(!run('phasePanel()').includes('data-finish-spectating'));context.paused=false;
+ const button={};groups.set('[data-finish-spectating]',[button]);run('bind()');context.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};const before=JSON.stringify(g);button.onclick();assert.equal(JSON.stringify(g),before);delete context.window.VEZDEHOT_TAB_SESSION;
+});
+test('doctor report appears after confirmation, names only the protected target, and does not invent a saved victim', () => {
+ const g=fixture('doctor');g.lastDoctorTarget={0:3};assert.equal(run('nightReport()'),'');g.phase='dawn';g.nightText='Ночью погибает Тая. Роль: Мирный.';
+ let output=run('nightReport()');assert.match(output,/Ты защищал: Мила/);assert.match(output,/не означает, что мафия нападала/);assert.ok(!/Комиссар|спас|предотвратил/.test(output));
+ g.players[3].name='<img src=x>';output=run('nightReport()');assert.match(output,/&lt;img/);assert.ok(!output.includes('<img'));
+ g.players[0].alive=false;assert.equal(run('nightReport()'),'','a dead doctor must not repeat an earlier protection as tonight’s choice');
+});
+test('a terminal vote shows its actual public elimination and opens those final ballots', () => {
+ const g=fixture('civilian');g.players.forEach(p=>{p.alive=[0,1,3,4].includes(p.id)});g.phase='vote';g.dayTarget=1;g.statementsRound=1;g.statements=[{actor:1,target:0},{actor:3,target:1},{actor:4,target:1}];
+ run('mafiaCore(g,()=>.5).castVote()');assert.equal(g.over,true);const output=run('resultPanel()');assert.match(output,/Решающее голосование · раунд 1/);assert.match(output,/выбывает Луна/);assert.match(output,/Роль: Мафия/);assert.match(output,/data-open-final-ballots/);
+ let focus=0;const ballots={open:false,scrollIntoView(){},querySelector(){return {focus(){focus++}}}},button={};selectors.set('[data-detail="ballots"]',ballots);groups.set('[data-open-final-ballots]',[button]);run('bind()');button.onclick();assert.equal(ballots.open,true);assert.equal(focus,1);
+ g.voteHistory.at(-1).message='<img src=x>';assert.ok(!run('finalEventPanel()').includes('<img'));
+});
+test('a night-ending result uses the current night and never attributes the previous round’s votes as decisive', () => {
+ const g=fixture('mafia');g.players.forEach(p=>{p.alive=[0,2,4,5,6].includes(p.id)});g.round=2;g.nightTarget=4;g.ballots=[{voter:1,target:3}];g.voteHistory=[{round:1,ballots:[{voter:1,target:3}],message:'Старое голосование'}];g.votes=null;
+ run('mafiaCore(g,()=>.5).confirmNight()');assert.equal(g.over,true);const output=run('finalEventPanel()');assert.match(output,/Решающая ночь · раунд 2/);assert.match(output,/погибает Север/);assert.ok(!output.includes('Старое голосование'));assert.ok(!output.includes('data-open-final-ballots'));
+});
+test('a round-25 draw labels the last tied vote without inventing a decisive elimination', () => {
+ const g=fixture('civilian');g.players[0].alive=false;g.round=25;g.phase='vote';g.statementsRound=25;g.statements=[{actor:1,target:4},{actor:2,target:4},{actor:3,target:5},{actor:4,target:5},{actor:5,target:4},{actor:6,target:5}];
+ run('var core=mafiaCore(g,()=>.5);core.castVote();core.continueAfterVote()');assert.equal(g.draw,true);const output=run('resultPanel()');assert.match(output,/За 25 раундов/);assert.match(output,/Последнее голосование · раунд 25/);assert.match(output,/никто не исключён/);assert.ok(!output.includes('Решающая ночь'));assert.ok(!output.includes('Решающее голосование'));
+ g.voteHistory=[];g.votes=null;assert.equal(run('finalEventPanel()'),'','missing legacy evidence must not be inferred from the last night');
+});
+test('practice currency is named in the header, setup and completed ledger', () => {
+ const g=fixture();assert.match(run('top()'),/Баланс практики/);assert.match(run('balanceMarkup()'),/Практика/);assert.match(run('intro()'),/Серверные монеты сохраняются отдельно/);g.over=true;g.win=true;g.winningTeam='town';assert.match(run('resultPanel()'),/Расчёт баланса практики/);
+});
+
 // Parsing the shipped inline script catches accidental syntax edits outside the extracted regions.
 new Function(html.match(/<script>\s*([\s\S]*?)<\/script>/)[1]);
 console.log(`${count} Mafia UI checks passed`);

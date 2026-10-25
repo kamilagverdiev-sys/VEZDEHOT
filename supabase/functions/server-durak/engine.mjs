@@ -54,6 +54,7 @@ export function createGame({bots=1,difficulty='normal',nick='Ты',id=crypto.ran
 }
 export function legalActions(g) {
   if(g.over)return {cards:[],actions:[]};
+  if(g.finished.includes(0))return {cards:[],actions:['continue']};
   const core=rules(),actions=[],cards=[];
   if(g.phase==='defend'&&g.defender===0) {
     actions.push('take');
@@ -72,6 +73,9 @@ export function applyAction(state, action, random=secureRandom) {
   if(!action||typeof action!=='object'||Array.isArray(action))throw new GameError('invalid_request',400);
   const keys=Object.keys(action);
   if(!['attack','defend','take','finish','continue','resign'].includes(action.type)||keys.some(k=>!['type','cardId'].includes(k))||(['attack','defend'].includes(action.type)?typeof action.cardId!=='string':keys.length!==1))throw new GameError('invalid_request',400);
+  // An older client may still offer exit after the human has already gone out.
+  // Honour the earned game outcome; never turn that completed hand into forfeiture.
+  if(state.finished.includes(0)&&action.type==='resign')action={type:'continue'};
   const legal=legalActions(state);
   if(!legal.actions.includes(action.type))fail('illegal_action');
   if(['attack','defend'].includes(action.type)&&!legal.cards.includes(action.cardId))fail('illegal_card');
@@ -81,11 +85,12 @@ export function applyAction(state, action, random=secureRandom) {
     case 'defend': changed=core.durakApplyDefense(g,0,g.players[0].hand.findIndex(c=>c.id===action.cardId));break;
     case 'take': changed=core.durakApplyResolve(g,true);break;
     case 'finish': changed=core.durakPrepareRound(g,false);break;
-    case 'continue': changed=g.phase==='roundEnd'?core.durakCommitRound(g):core.durakContinueResolve(g);break;
+    case 'continue': changed=g.finished.includes(0)?true:g.phase==='roundEnd'?core.durakCommitRound(g):core.durakContinueResolve(g);break;
     case 'resign': g.over=true;g.phase='over';g.resigned=true;g.draw=false;g.winner=null;g.loser=0;g.message='Ты завершил серверную партию. Можно открыть новый стол.';changed=true;break;
   }
   if(!changed)fail('illegal_action');
-  runBots(g,core);g.economy=economyFor(g,state.economy?.stake||0);assertIntegrity(g);return g;
+  if(g.finished.includes(0)&&!g.over)core.durakResolveBots(g);else runBots(g,core);
+  g.economy=economyFor(g,state.economy?.stake||0);assertIntegrity(g);return g;
 }
 export function projectGame(g) {
   if(!g)return null;

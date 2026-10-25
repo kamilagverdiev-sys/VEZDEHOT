@@ -79,3 +79,7 @@ test('wallet updates preserve edited replay settings and focus, mount only once,
 test('paid exit explains the forfeited entry before sending the server-only resignation',()=>{
  const g=game();g.economy={version:1,stake:100,settled:false,payout:0,xp:0,outcome:null};const h=harness(g);assert(h.query('.sd-table-meta').textContent.includes('ВХОД 100 V'));h.query('[data-resign]').click();assert(h.query('.sd-resign p').textContent.includes('100 V не возвращается'));assert(h.query('.sd-resign p').textContent.includes('XP за выход не начисляются'));assert.deepEqual(h.actions,[]);h.query('[data-resign-confirm]').click();assert.deepEqual(h.actions,[{type:'resign'}]);assert.equal(h.counts().legacyWrites,0);
 });
+test('a restored completed human hand offers one bot completion action and never offers forfeiture',()=>{
+ const g=game(0);g.finished=[0];g.attacker=1;g.defender=2;g.phase='resolve';g.legal={cards:[],actions:['continue']};g.economy={version:1,stake:100,settled:false,payout:0,xp:0,outcome:null};const h=harness(g);
+ assert.equal(h.query('.sd-turn h1').textContent,'Ты вышел без карт');assert.equal(h.query('[data-resign]'),null);assert.equal(h.query('[data-action]').textContent,'Завершить партию ботов');assert(!h.query('.sd-empty-table').textContent.includes('Твой следующий ход'));h.query('[data-action]').click();assert.deepEqual(h.actions,[{type:'continue'}]);assert.equal(h.counts().legacyWrites,0);
+});

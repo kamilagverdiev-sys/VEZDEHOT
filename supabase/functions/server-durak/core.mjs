@@ -123,5 +123,23 @@ function durakCommitRound(g){
       g.message=took?(d===0?'Ты пропускаешь ход':g.players[d].name+' пропускает ход')+'. '+(g.attacker===0?'Теперь атакуешь ты':'Атакует '+g.players[g.attacker].name):g.finished.includes(d)?(d===0?'Ты':g.players[d].name)+' вышел без карт. '+(g.attacker===0?'Следующим атакуешь ты':'Следующим атакует '+g.players[g.attacker].name):g.attacker===0?'Ты отбился и начинаешь атаку':g.players[g.attacker].name+' отбился и начинает атаку';
       return true;
     }
-return {newGame, beats, canAddAttack, botCard, chooseDefense, durakContinueAttack, durakApplyAttack, durakApplyDefense, durakApplyResolve, durakPrepareRound, durakContinueResolve, durakCommitRound};
+function durakResolveBots(g,limit=512){
+      let steps=0;const budget=Number.isInteger(limit)?Math.max(0,Math.min(512,limit)):512;
+      if(!g||g.over||g.paused||!g.finished?.includes(0)||g.players[0].hand.length||g.deck.length)return {steps,complete:!!g?.over};
+      while(!g.over&&steps<budget){
+        let changed=false;
+        if(g.phase==='attack'&&g.attacker!==0&&g.players[g.attacker].kind==='bot'){
+          const actor=g.attacker,c=botCard(actor,g);
+          changed=g.table.length&&!durakContinueAttack(actor,g,c)?durakPrepareRound(g,false):!!c&&durakApplyAttack(g,actor,g.players[actor].hand.indexOf(c));
+        }else if(g.phase==='defend'&&g.defender!==0&&g.players[g.defender].kind==='bot'){
+          const actor=g.defender,c=chooseDefense(actor,g);
+          changed=c?durakApplyDefense(g,actor,g.players[actor].hand.indexOf(c)):durakApplyResolve(g,true);
+        }else if(g.phase==='resolve')changed=durakContinueResolve(g);
+        else if(g.phase==='roundEnd')changed=durakCommitRound(g);
+        if(!changed)break;steps++;
+      }
+      if(!g.over)g.message='Ты уже вышел без карт. Осталось определить итог ботов — нажми «Завершить партию ботов».';
+      return {steps,complete:g.over};
+    }
+return {newGame, beats, canAddAttack, botCard, chooseDefense, durakContinueAttack, durakApplyAttack, durakApplyDefense, durakApplyResolve, durakPrepareRound, durakContinueResolve, durakCommitRound, durakResolveBots};
 }

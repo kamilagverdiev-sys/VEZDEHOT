@@ -62,4 +62,24 @@ test('marks reject invalid keys and values, protect saved state, and respect tab
 });
 test('120 seeded games complete with legal players, team results and no timers',()=>{p.balance=50000;for(let n=0;n<120;n++){run('g=null;paused=false');api.start();let actions=0;while(!ctx.g.over&&actions++<200){const g=ctx.g;if(g.phase==='night'){const me=g.players[0];if(me.alive&&me.role!=='civilian'){const target=g.players.find(x=>api.targetable(x,me.role,me));if(target)api.chooseNight(target.id)}api.confirmNight()}else if(g.phase==='dawn')api.beginDay();else if(g.phase==='day')api.beginVote();else if(g.phase==='vote'){if(g.players[0].alive){const target=g.players.find(x=>api.targetable(x,'vote',g.players[0]));api.chooseVote(target.id)}api.castVote()}else if(g.phase==='voteResult')api.continueAfterVote();else throw Error(g.phase)}assert(ctx.g.over);assert(['town','mafia','draw'].includes(ctx.g.winningTeam));assert.equal(ctx.g.players.length,7);assert.equal(new Set(ctx.g.revealed).size,ctx.g.revealed.length)}});
 assert(!source.includes('setTimeout'),'all progression must be explicit');
+
+test('detective learns only the target side, never a false civilian role',()=>{
+ const g=fixture();api.chooseNight(3);assert.equal(g.privateNotes.length,0);api.confirmNight();assert.equal(g.knowledge[0][3],'town');assert.match(g.privateNotes[0],/Мила — не мафия/);assert.ok(!g.privateNotes[0].includes('мирный житель'));assert.ok(!g.privateNotes[0].includes('Доктор'));
+});
+test('automatic spectating follows the exact manual core trajectory and settles once without another entry',()=>{
+ for(let n=0;n<60;n++){
+  const g=fixture(n%2?'mafia':'civilian');g.diff=['easy','normal','hard'][n%3];g.players[0].alive=false;g.revealed=[0];
+  seed=7000+n;run("var expected=JSON.parse(JSON.stringify(g)),manual=mafiaCore(expected,Math.random),steps=0;while(!expected.over&&steps++<125){var move={night:'confirmNight',dawn:'beginDay',day:'beginVote',vote:'castVote',voteResult:'continueAfterVote'}[expected.phase];if(!manual[move]())throw Error('Manual phase failed')}");
+  assert.equal(ctx.expected.over,true);const expected=JSON.parse(JSON.stringify(ctx.expected)),before=results,coins=p.balance;seed=7000+n;
+  assert.equal(run('finishSpectating()'),true);const actual=JSON.parse(JSON.stringify(ctx.g));delete actual.paused;delete actual.settled;delete expected.paused;delete expected.settled;assert.deepEqual(actual,expected);
+  assert.equal(results,before+1);assert.equal(p.balance,coins+(g.draw?100:g.win?250:0));assert.equal(g.settled,true);assert.equal(run('finishSpectating()'),false);assert.equal(results,before+1);assert.equal(run('validGame(g)'),true);
+ }
+});
+test('spectator completion cannot act for a living player, during pause, or after ownership loss',()=>{
+ for(const mode of ['alive','paused','readonly']){const g=fixture();if(mode!=='alive')g.players[0].alive=false;if(mode==='paused')ctx.paused=true;if(mode==='readonly')ctx.window.VEZDEHOT_TAB_SESSION={canWrite:()=>false};const before=JSON.stringify(g),rng=seed,recordings=results;assert.equal(run('finishSpectating()'),false);assert.equal(JSON.stringify(g),before);assert.equal(seed,rng);assert.equal(results,recordings);delete ctx.window.VEZDEHOT_TAB_SESSION}
+});
+test('spectator completion uses the normal round-25 draw and one returned entry',()=>{
+ const g=fixture('civilian');g.players[0].alive=false;g.round=25;g.phase='voteResult';const before=results,coins=p.balance;
+ assert.equal(run('finishSpectating()'),true);assert.equal(g.draw,true);assert.equal(g.winningTeam,'draw');assert.equal(g.round,25);assert.equal(p.balance,coins+100);assert.equal(results,before+1);
+});
 console.log(`${tests} Mafia checks passed`);
