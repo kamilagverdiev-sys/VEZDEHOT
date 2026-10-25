@@ -22,7 +22,7 @@ const context = {
   },
   localStorage: { getItem: key => writes.get(key) || null, setItem: (key, value) => writes.set(key, value), removeItem: key => writes.delete(key) }
 };
-vm.createContext(context); vm.runInContext(engine + '\n' + ui, context);
+vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context); vm.runInContext(engine + '\n' + ui, context);
 const run = text => vm.runInContext(text, context);
 function fixture(role = 'detective') {
   selectors.clear(); groups.clear(); profile.balance = 10000;

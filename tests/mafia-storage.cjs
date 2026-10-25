@@ -29,7 +29,7 @@ function harness(data = new Map(), sharedProfile) {
     }
   };
   context.window = context;
-  vm.createContext(context); vm.runInContext(storageSource + '\n' + engine + '\n' + bootstrap, context);
+  vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context); vm.runInContext(storageSource + '\n' + engine + '\n' + bootstrap, context);
   const run = code => vm.runInContext(code, context);
   return { context, data, profile, app, run, store: context.VEZDEHOT_GAME_STORE,
     block(value) { blocked = value; }, owner(value) { owner = value; }, failResults(value) { resultFailure = value; }, recordings: () => recordings,

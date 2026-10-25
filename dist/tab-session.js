@@ -7,10 +7,13 @@ let scope=null,phase='idle',owned=false,yielding=false,everOwned=false,invalidat
 let requestedScope=null,scopeVersion=0,pendingScopeStart=null;
 let startPromise,resolveStart,rejectStart,beforeYield,unlock=null,acquisition=null,yieldFlight=null,channel=null;
 let overlay=null,panel,title,copy,note,button,previousFocus,observer,bodyPending=false,displayState=null;
+let writeGuard=null;
 const inertNodes=new Map();
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
-const canWrite=()=>owned&&!yielding&&!invalidated&&!hidden&&phase==='active';
-const status=()=>Object.freeze({scope,state:phase,canWrite:canWrite(),ownsLock:owned,pending:!!acquisition,needsReload:everOwned&&!canWrite()});
+const ownsLock=()=>owned&&!yielding&&!invalidated&&!hidden&&phase==='active';
+const canWrite=()=>{if(!ownsLock())return false;try{return !writeGuard||writeGuard()!==false}catch{return false}};
+function setWriteGuard(guard){if(guard!==null&&guard!==undefined&&typeof guard!=='function')throw new TypeError('A write guard must be a function.');writeGuard=guard||null;return status()}
+const status=()=>Object.freeze({scope,state:phase,canWrite:canWrite(),ownsLock:owned,pending:!!acquisition,needsReload:everOwned&&!ownsLock()});
 const emit=(type,reason)=>document.dispatchEvent(new CustomEvent(type,{detail:{scope,reason}}));
 
 function inertBackground(){
@@ -132,7 +135,7 @@ function drop(reason,suppressEvents=false){
 }
 function pause(reason,suppressEvents=false){
   // Saves in these synchronous listeners are still authorized for this scope.
-  if(canWrite()&&!suppressEvents)emit('vezdehot:sessionpause',reason);
+  if(ownsLock()&&!suppressEvents)emit('vezdehot:sessionpause',reason);
   yielding=true;
 }
 function release(reason='released',suppressEvents=false){
@@ -211,5 +214,5 @@ window.addEventListener('pagehide',()=>{
   pause('pagehide');hidden=true;cancelAcquisition();drop('pagehide');channel?.close();channel=null;
 });
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload()});
-window.VEZDEHOT_TAB_SESSION=Object.freeze({start,canWrite,requestControl,release,status});
+window.VEZDEHOT_TAB_SESSION=Object.freeze({start,canWrite,ownsLock,setWriteGuard,requestControl,release,status});
 })();

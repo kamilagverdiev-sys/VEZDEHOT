@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0d1020">
 <meta name="description" content="VEZDEHOT — городская стратегия: покупай кварталы, собирай аренду и управляй капиталом."><title>Монополия — VEZDEHOT</title>
-<link rel="stylesheet" href="./platform.css"><link rel="stylesheet" href="./session.css"><link rel="stylesheet" href="./game-guide.css"><link rel="stylesheet" href="./opponents.css"><script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script>
+<link rel="stylesheet" href="./platform.css"><link rel="stylesheet" href="./session.css"><link rel="stylesheet" href="./game-guide.css"><link rel="stylesheet" href="./opponents.css"><script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./session-validation.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./cloud-checkpoint.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script>
 <style>
 :root{color-scheme:dark;--bg:#0d1020;--panel:#161c2b;--line:#ffffff12;--muted:#9ba6b5;--text:#f1efe6;--accent:#d6f49b;--teal:#215b4d;--ivory:#f3f0e3;--violet:#c2b0ee}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#0d1020;color:var(--text);font:500 14px/1.5 Inter,system-ui,-apple-system,sans-serif}body{background:radial-gradient(ellipse at 12% 0,#18352e60,transparent 48%),#0d1020}button,a,select{font:inherit}button{cursor:pointer;touch-action:manipulation}button:disabled{opacity:.46;cursor:default}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:4px}button,a{-webkit-tap-highlight-color:transparent}button{color:inherit}svg{display:block}button,a,select{max-width:100%}.app{max-width:1280px;margin:auto;padding:calc(18px + var(--safe-t,env(safe-area-inset-top,0px))) 28px calc(32px + var(--safe-b,env(safe-area-inset-bottom,0px)))}
@@ -115,31 +115,7 @@ function settleGame(){if(!writable()||!game||!game.over)return false;if(game.set
 function finish(won,reason,kind){if(!writable()||!game||game.over)return;cancelTimer();game.over=true;game.phase='over';game.winner=won?0:null;game.finishKind=kind||(alivePlayers().length===1?'last-player':!game.players[0].alive?'bankrupt':'finished');if(game.finishKind==='last-player')game.winners=alivePlayers().map(function(p){return p.id});game.resultReason=reason;game.message=won?'Ты выиграл городскую партию.':game.finishKind==='bankrupt'?'Ты выбыл из партии.':'Партия завершена.';settleGame();render()}
 function togglePause(){if(!writable()||!game||game.over)return;cancelTimer();game.paused=!game.paused;save();render();if(!game.paused)resumeTimers()}
 function resumeTimers(){if(!game||!canRun(game))return;if(game.phase==='rolling')schedule(resolveRoll,650);else if(game.phase==='ready'&&game.turn!==0)schedule(roll,game.pace==='calm'?1500:750)}
-function restore(value){
-  if(!value||value.version!==3||typeof value.id!=='string'||!value.id||!Array.isArray(value.players)||value.players.length!==4||!Array.isArray(value.board)||value.board.length!==20)return null;
-  var integer=function(n,min,max){return Number.isInteger(n)&&n>=min&&n<=max};
-  if(!integer(value.turn,0,3)||!integer(value.turnNumber,1,80)||!['ready','rolling','buy','review','over'].includes(value.phase)||typeof value.over!=='boolean'||(value.phase==='over')!==value.over||!Number.isFinite(value.bank))return null;
-  if(value.players.some(function(p,i){return !p||p.id!==i||typeof p.name!=='string'||!integer(p.money,0,2000000000)||!integer(p.pos,0,19)||typeof p.alive!=='boolean'||!integer(p.skip,0,1)}))return null;
-  if(!value.players.some(function(p){return p.alive})||(!value.over&&(!value.players[0].alive||!value.players[value.turn].alive))||typeof value.settled!=='boolean'||(value.winner!==null&&value.winner!==0)||(!value.over&&(value.settled||value.winner!==null))||(value.winner===0&&!value.players[0].alive))return null;
-  if(!Array.isArray(value.dice)||value.dice.length!==2||value.dice.some(function(n){return !integer(n,1,6)}))return null;
-  if(value.phase==='rolling'&&(!integer(value.pendingSteps,2,12)||value.pendingSteps!==value.dice[0]+value.dice[1]))return null;
-  if(value.board.some(function(c,i){return !c||(c.owner!==null&&(!integer(c.owner,0,3)||!value.players[c.owner].alive||boardTemplate[i].kind!=='property'))}))return null;
-  if(Math.abs(value.players.reduce(function(n,p){return n+p.money},value.bank)-6000)>0.001)return null;
-  var restored=Object.assign({},value);restored.players=value.players.map(function(p){return Object.assign({},p,{name:p.name.slice(0,24),properties:[]})});
-  restored.board=boardTemplate.map(function(c,i){var next=Object.assign({},c,{owner:value.board[i].owner});if(next.owner!==null)restored.players[next.owner].properties.push(i);return next});
-  var at=restored.board[restored.players[0].pos];if(value.phase==='buy'&&(value.turn!==0||at.kind!=='property'||at.owner!==null||restored.players[0].money<at.price))return null;
-  restored.maxTurns=80;restored.paused=!restored.over;restored.pendingSteps=value.phase==='rolling'?value.pendingSteps:0;
-  restored.diff=['easy','normal','hard'].includes(value.diff)?value.diff:'normal';restored.pace=['calm','normal'].includes(value.pace)?value.pace:'calm';
-  restored.log=Array.isArray(value.log)?value.log.filter(function(t){return typeof t==='string'}).slice(0,60):[];
-  restored.journal=Array.isArray(value.journal)?value.journal.filter(function(e){return e&&typeof e.text==='string'&&(e.turn===null||integer(e.turn,1,80))}).slice(0,60).map(function(e){return{turn:e.turn,text:e.text}}):restored.log.map(function(text){return{turn:null,text:text}});restored.message=typeof value.message==='string'?value.message:'Партия восстановлена.';
-  restored.ledger=Array.isArray(value.ledger)?value.ledger.filter(function(e){return e&&integer(e.player,0,3)&&Number.isInteger(e.delta)&&integer(e.balance,0,2000000000)&&integer(e.turn,1,80)&&typeof e.label==='string'}).slice(0,240):[];
-  restored.winners=Array.isArray(value.winners)?Array.from(new Set(value.winners.filter(function(id){return integer(id,0,3)&&restored.players[id].alive}))):[];
-  restored.lastPath=Array.isArray(value.lastPath)?value.lastPath.filter(function(i){return integer(i,0,19)}).slice(-32):[];
-  if(!integer(restored.lastFrom,0,19))restored.lastFrom=restored.players[restored.turn].pos;
-  var roll=value.lastRoll;restored.lastRoll=roll&&roll.turn===value.turnNumber&&roll.player===value.turn&&Array.isArray(roll.dice)&&roll.dice.length===2&&roll.dice.every(function(n,i){return n===value.dice[i]})?roll:(value.phase==='rolling'||value.lastRoll===undefined&&['buy','review'].includes(value.phase)&&value.lastSteps>0)?{turn:value.turnNumber,player:value.turn,dice:value.dice.slice()}:null;
-  var event=value.lastChance;restored.lastChance=event&&event.turn===value.turnNumber&&integer(event.player,0,3)&&typeof event.text==='string'&&Number.isFinite(event.delta)&&Number.isFinite(event.move)?event:null;
-  return restored;
-}
+function restore(value){try{return globalThis.VEZDEHOT_SESSION_VALIDATION.validate('monopoly',value)}catch(e){return null}}
 // Engine ends here. UI metadata never changes transaction or turn rules.
 var groupMeta={pink:{color:'#c994aa',name:'Творческий квартал'},blue:{color:'#80aec4',name:'Городские маршруты'},green:{color:'#8dbb98',name:'Зелёная линия'},orange:{color:'#d9ad75',name:'Квартал идей'},purple:{color:'#b0a0ca',name:'Большой город'}};
 function cellPosition(i){if(i<=5)return[6,6-i];if(i<=10)return[11-i,1];if(i<=15)return[1,i-9];return[i-14,6]}

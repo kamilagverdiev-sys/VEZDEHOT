@@ -2,6 +2,7 @@
 window.VEZDEHOT_AUTH_CONFIG = Object.freeze({
   url: 'https://cyzbraifdkrqicdsbuwe.supabase.co',
   publishableKey: 'sb_publishable_V_61K2a5-bB-1N9hbhTvjA_DLHdxRu-',
+  checkpointsEnabled: true,
   googleEnabled: false,
   telegramEnabled: false,
   telegramProvider: 'custom:telegram',

@@ -40,7 +40,7 @@
 .mafia-fact-tag{display:block;font-size:8px;text-transform:uppercase;letter-spacing:.09em;margin-bottom:5px;color:#c1afd9}.mafia-evidence-note{font-size:11px;line-height:1.65;opacity:.7;margin:12px 0 0}.mafia-review{padding:22px;margin:0 0 20px}.mafia-review h2{font-size:20px;margin:7px 0 10px}.mafia-review header>p{font-size:12px;line-height:1.7;color:#b5acc5;max-width:750px;margin:0}.mafia-review-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:20px 0}.mafia-review-counts>div{padding:12px;border:1px solid #cab8e51f;border-radius:12px;background:#cab8e506}.mafia-review-counts dt{font-size:10px;line-height:1.4;color:#b5acc5}.mafia-review-counts dd{font-size:26px;margin:7px 0 0;color:#ded2f1}.evidence .vh-opponents{min-width:0}.evidence .vh-opponent-row{display:block}.evidence .vh-opponent-row p{margin:6px 0 0;font-size:12px;line-height:1.65}
 @media(max-width:520px){.mafia-review{padding:16px}.mafia-review h2{font-size:18px}.mafia-review-counts{gap:6px}.mafia-review-counts>div{padding:10px 8px}.mafia-review-counts dd{font-size:23px}.mafia-review-counts dt{font-size:9px}}
 </style>
-<script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script>
+<script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./session-validation.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./cloud-checkpoint.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script>
 </head>
 <body data-game="mafia"><main id="app" class="app"><div class="loading">Открываем город…</div></main>
 <script>
@@ -54,24 +54,7 @@ function canWrite(){return !accountChanging&&(!window.VEZDEHOT_TAB_SESSION||wind
 function profile(){var p=platform();if(p&&p.getProfile)return p.getProfile();try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){return {}}}
 function sessionKey(){if(!boundSessionKey)boundSessionKey='vezdehot_mafia_v3_'+(platform()?.scopeKey?.()||'guest');return boundSessionKey}
 function sessionScope(){return sessionKey().slice('vezdehot_mafia_v3_'.length)}
-function validGame(x){
- var object=function(v){return !!v&&typeof v==='object'&&!Array.isArray(v)},id=function(v){return Number.isInteger(v)&&v>=0&&v<7},maybeId=function(v){return v===null||id(v)},strings=function(v){return Array.isArray(v)&&v.every(function(s){return typeof s==='string'})},ballots=function(v){return Array.isArray(v)&&v.length<=7&&v.every(function(b){return object(b)&&id(b.voter)&&id(b.target)&&b.voter!==b.target})&&new Set(v.map(function(b){return b.voter})).size===v.length};
- if(!object(x)||x.version!==GAME_VERSION||typeof x.id!=='string'||!x.id||!Number.isInteger(x.round)||x.round<1||x.round>25||!['night','dawn','day','vote','voteResult','result'].includes(x.phase))return false;
- if(typeof x.over!=='boolean'||typeof x.settled!=='boolean'||x.over!==(x.phase==='result')||x.settled&&!x.over||x.paused!==undefined&&typeof x.paused!=='boolean')return false;
- if(!Array.isArray(x.players)||x.players.length!==7||!x.players.every(function(p,i){return object(p)&&p.id===i&&typeof p.name==='string'&&Object.prototype.hasOwnProperty.call(roleInfo,p.role)&&typeof p.alive==='boolean'&&p.kind===(i===0?'human':'bot')}))return false;
- if(!strings(x.log)||!strings(x.privateNotes)||typeof x.message!=='string'||typeof x.nightText!=='string'||!['easy','normal','hard'].includes(x.diff)||!maybeId(x.nightTarget)||!maybeId(x.dayTarget))return false;
- if(!Array.isArray(x.revealed)||!x.revealed.every(id)||new Set(x.revealed).size!==x.revealed.length||!ballots(x.ballots))return false;
- if(x.votes!==null&&(!object(x.votes)||!Object.entries(x.votes).every(function(v){return id(+v[0])&&Number.isInteger(v[1])&&v[1]>=0&&v[1]<=7})))return false;
- if(!object(x.knowledge)||!Object.entries(x.knowledge).every(function(v){return id(+v[0])&&object(v[1])&&Object.entries(v[1]).every(function(k){return id(+k[0])&&['mafia','town'].includes(k[1])})}))return false;
- if(!object(x.publicSuspicion)||!Object.entries(x.publicSuspicion).every(function(v){return id(+v[0])&&Number.isFinite(v[1])})||!object(x.lastDoctorTarget)||!Object.entries(x.lastDoctorTarget).every(function(v){return id(+v[0])&&id(v[1])}))return false;
- if(!Array.isArray(x.statements)||!x.statements.every(function(s){return object(s)&&id(s.actor)&&maybeId(s.target)&&typeof s.text==='string'&&(s.context===undefined||typeof s.context==='string')}))return false;
- if(x.statementsRound!==undefined&&x.statementsRound!==null&&(!Number.isInteger(x.statementsRound)||x.statementsRound<1||x.statementsRound>x.round))return false;
- if(x.voteHistory!==undefined&&(!Array.isArray(x.voteHistory)||x.voteHistory.length>25||new Set(x.voteHistory.map(function(v){return v&&v.round})).size!==x.voteHistory.length||!x.voteHistory.every(function(v){return object(v)&&Number.isInteger(v.round)&&v.round>0&&v.round<=x.round&&ballots(v.ballots)&&(v.eliminated===undefined||maybeId(v.eliminated))&&typeof v.message==='string'})))return false;
- if(x.eliminated!==undefined&&!maybeId(x.eliminated))return false;
- if(x.personalMarks!==undefined&&(!object(x.personalMarks)||!Object.entries(x.personalMarks).every(function(v){return /^[1-6]$/.test(v[0])&&['suspect','unsure','trust'].includes(v[1])})))return false;
- if(x.over&&(!['town','mafia','draw'].includes(x.winningTeam)||typeof x.win!=='boolean'||typeof x.draw!=='boolean'||typeof x.resultReason!=='string'||x.draw!==(x.winningTeam==='draw')||x.win!==(x.winningTeam===roleInfo[x.players[0].role].team)))return false;
- return true;
-}
+function validGame(value){try{return !!globalThis.VEZDEHOT_SESSION_VALIDATION.validate('mafia',value)}catch(e){return false}}
 function esc(x){return String(x).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])})}
 function fmt(n){return Math.floor(n).toLocaleString('ru-RU').replace(/\u00a0/g,' ')}
 function syncProfile(){saved=profile()||{};balance=Number.isFinite(saved.balance)?saved.balance:10000;try{saved.mafiaDiff=localStorage.getItem(sessionKey()+'_difficulty')||saved.mafiaDiff||'normal'}catch(e){}}

@@ -27,7 +27,7 @@ function harness() {
       }
     } }
   };
-  vm.createContext(context); vm.runInContext(source, context);
+  vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context); vm.runInContext(source, context);
   const run = code => vm.runInContext(code, context);
   const api = run('({newGame,start,alive,botObservation,botChoice,botNightChoice,botVote,statementReason,publicEvidence,playerVoteFacts,chooseNight,confirmNight,beginDay,beginVote,chooseVote,castVote,continueAfterVote,targetable,endGame,validGame,saveState,restore})');
   return { context, run, api, profile, storage, recorded, seed(value) { seed = value; } };

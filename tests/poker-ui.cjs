@@ -58,7 +58,7 @@ window.__poker = { get g() { return g; }, get error() { return error; }, get acc
   resultTitle, resultReason, resultDetails, outcomeBanner, finishWatching, raisePresets, raiseLabel, raisePreview, view, pokerOpponents, pokerBotStyle, pokerContext, pokerLessons, pokerJournal, pokerJournals, openPokerGuide, evaluate, splitPots, setRaise(value) { selectedRaise=value; } };
 boot();`;
   assert.ok(inline.includes('\nboot();\n'), 'Expected the shipped bootstrap call');
-  vm.createContext(context);
+  vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context);
   if (guide) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../dist/game-guide.js'), 'utf8'), context, { filename: 'game-guide.js' });
     context.window.VEZDEHOT_GUIDE = { ...context.window.VEZDEHOT_GUIDE, open(config) { guideConfig=config;guideOpens++; } };

@@ -5,6 +5,7 @@ const engine=inline.split('// POKER_ENGINE_START')[1].split('// POKER_ENGINE_END
 const plain=value=>JSON.parse(JSON.stringify(value));
 const forbidden=()=>{throw new Error('Walkthrough touched external randomness, time or storage')};
 const isolated=vm.createContext({Math:Object.assign(Object.create(Math),{random:forbidden}),Date:{now:forbidden},localStorage:{getItem:forbidden,setItem:forbidden,removeItem:forbidden},console});
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),isolated);
 vm.runInContext(engine+'\n'+walk+'\nthis.adapter=pokerWalkthrough();this.engine={legalActions,evaluate,splitPots};',isolated);
 const adapter=isolated.adapter;
 const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value)}return value};
@@ -33,7 +34,7 @@ async function liveHarness(){
     localStorage:{getItem:key=>store.get(key)||null,setItem(key,value){writes++;store.set(key,String(value))},removeItem(key){writes++;store.delete(key)}},
     window:{VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT_GUIDE:{open:options=>guide=options},VEZDEHOT:{ready:Promise.resolve(),scopeKey:()=>'guest',getProfile:()=>plain(profile),updateProfile(patch){profile={...profile,...plain(patch)}},recordResult(){records++;throw new Error('Lesson attempted to record a real result')}},addEventListener(){},matchMedia:()=>({matches:true})},
     setTimeout(fn){const id=timers.size+1;timers.set(id,fn);return id},clearTimeout:id=>timers.delete(id)};
-  vm.createContext(context);const expose="\nrender=function(){};window.__lessonTest={startHand,openPokerGuide,pokerWalkthrough,get game(){return g;}};boot();\n";
+  vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context);const expose="\nrender=function(){};window.__lessonTest={startHand,openPokerGuide,pokerWalkthrough,get game(){return g;}};boot();\n";
   vm.runInContext(inline.replace('\nboot();\n',expose),context);await Promise.resolve();await Promise.resolve();
   return {api:context.window.__lessonTest,store,timers,guide:()=>guide,profile:()=>plain(profile),writes:()=>writes,records:()=>records,randomCalls:()=>randomCalls,blockRandom:()=>{blockRandom=true}};
 }

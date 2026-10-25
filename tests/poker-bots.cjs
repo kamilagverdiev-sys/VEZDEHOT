@@ -4,6 +4,7 @@ const source=fs.readFileSync(path.join(__dirname,'../dist/poker.html'),'utf8').s
 const PokerEquity=require('../dist/poker-equity.js');let seed=43193,sequence=null,index=0;
 const random=()=>sequence?sequence[index++%sequence.length]:(seed=(Math.imul(seed,1664525)+1013904223)>>>0)/2**32;
 const context=vm.createContext({Math:Object.assign(Object.create(Math),{random}),Date,console,PokerEquity});
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context);
 vm.runInContext(source+'\nthis.api={pokerBotStyle,pokerBotEstimate,pokerBotPosition,pokerBotDecision,botMove,pokerNewGame,pokerNextHand,pokerContinue,pokerAction,legalActions,evaluate,makeDeck,validPokerSave};',context);const a=context.api;
 const plain=value=>JSON.parse(JSON.stringify(value));
 const cards=text=>text.split(' ').map(id=>({id,rank:id.slice(0,-1),suit:id.slice(-1),v:['2','3','4','5','6','7','8','9','10','J','Q','K','A'].indexOf(id.slice(0,-1))+2,red:['♥','♦'].includes(id.slice(-1))}));

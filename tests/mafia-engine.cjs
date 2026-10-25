@@ -4,7 +4,7 @@ const source=html.split('// MAFIA_ENGINE_START')[1].split('// MAFIA_ENGINE_END')
 let seed=67,store=new Map(),p={nick:'Тест',balance:10000,xp:0,wins:0,games:0},results=0,renderCalls=0;
 const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32};
 const ctx={console,Date,Math:Object.assign(Object.create(Math),{random}),window:{VEZDEHOT:{scopeKey:()=> 'test-user',getProfile:()=>({...p}),updateProfile:patch=>Object.assign(p,patch),recordResult:r=>{results++;p.balance+=r.delta;p.xp+=r.xp;p.games++;p.wins+=r.win?1:0}}},localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},render:()=>renderCalls++,renderSelection:()=>renderCalls++};
-vm.createContext(ctx);vm.runInContext(source,ctx);
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),ctx);vm.runInContext(source,ctx);
 const run=code=>vm.runInContext(code,ctx),api=run('({newGame,start,endGame,checkWin,chooseNight,confirmNight,beginDay,beginVote,castVote,chooseVote,continueAfterVote,togglePause,restore,saveState,botVote,botChoice,targetable,reset})');
 function fixture(role='detective'){
  run('g=null;paused=false;syncProfile();g=newGame();');

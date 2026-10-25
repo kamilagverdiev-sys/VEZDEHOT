@@ -15,6 +15,7 @@ const isolated = vm.createContext({
   setTimeout: forbidden('timer'), clearTimeout: forbidden('timer'), setInterval: forbidden('timer'), clearInterval: forbidden('timer'),
   window: new Proxy({}, { get: forbidden('window') }), document: new Proxy({}, { get: forbidden('document') })
 });
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),isolated);
 vm.runInContext("'use strict';\n" + engine + '\n' + walkthrough + '\nthis.adapter=mafiaWalkthrough();this.rules={mafiaCore,validGame};', isolated);
 const adapter = isolated.adapter, rules = isolated.rules;
 const targetChoice = choice => /^(night|vote)-target:/.test(choice.id);
@@ -107,7 +108,7 @@ function liveHarness() {
       recordResult(result) { effect('records'); profile.balance += result.delta; profile.xp += result.xp; profile.games++; profile.wins += Number(result.win); return { ok: true }; }
     } }
   };
-  vm.createContext(context); vm.runInContext("'use strict';\n" + engine + '\n' + ui, context);
+  vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),context); vm.runInContext("'use strict';\n" + engine + '\n' + ui, context);
   context.render = () => { effect('renders'); }; context.renderSelection = () => { effect('renders'); };
   const run = code => vm.runInContext(code, context);
   const api = run('({start,chooseNight,confirmNight,beginDay,beginVote,chooseVote,castVote,continueAfterVote,saveState,restore,openMafiaGuide,mafiaWalkthrough})');

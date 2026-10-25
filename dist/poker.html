@@ -26,7 +26,7 @@ html[data-motion="reduced"] *,html[data-motion="reduced"] *:before,html[data-mot
 @media(max-width:600px){.pk-raise-range{font-size:12px}.pk-raise-value{font-size:17px}.pk-raise-presets button{font-size:11px;min-height:46px}.pk-raise-note{font-size:11px}.pk-position{min-width:19px;font-size:8px;margin-right:3px}.pk-stage-bar span{font-size:10px;min-height:34px}.pk-live-count{font-size:10px}.pk-summary{flex-wrap:wrap;gap:7px}.pk-stage-bar{flex:1}.pk-stage-bar span{flex:1;justify-content:center}}
 @media(max-width:380px){.pk-raise-preview{font-size:10px;padding:10px}.pk-raise-preview b{font-size:12px}.pk-stage-bar span{font-size:9px;padding-left:6px;padding-right:6px}.pk-live-count{font-size:9px}}
 .pk-seat-name .vh-bot-style{display:flex;width:max-content;max-width:100%;font-size:9px;letter-spacing:0;margin:4px auto 0;padding:2px 5px;line-height:1.45}.pk-rail>.vh-opponents{margin:0}
-</style><script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script><script src="./poker-equity.js"></script></head><body><main class="pk-app" id="app"><div class="pk-panel">Подготавливаем стол…</div></main><dialog class="pk-dialog" id="rules"><h2>Твой первый Hold’em</h2><p>У тебя две карты. На стол откроются ещё пять. Побеждает лучшая комбинация из любых пяти доступных карт. При равенстве банк делится; дополнительные карты — кикеры — тоже учитываются.</p><p>Пас — выйти из раздачи. Чек — пропустить без ставки. Колл — уравнять. Рейз — повысить общую ставку до указанного значения. Ва-банк сохраняет право на свою часть банка.</p><p>Малый блайнд 20, большой 40. Перед каждым новым этапом есть пауза. Таймера на твой ход нет.</p><div class="pk-combo-list"><span>1 · Стрит-флеш</span><span>2 · Каре</span><span>3 · Фулл-хаус</span><span>4 · Флеш</span><span>5 · Стрит</span><span>6 · Тройка</span><span>7 · Две пары</span><span>8 · Пара</span><span>9 · Старшая карта</span></div><p>Это тренировка на игровые монеты: Вход за стол — 100 V за 1 000 фишек. Между раздачами фишки сохраняются. Заверши стол между раздачами: каждые 10 фишек вернут 1 V (неполная десятка округляется вниз). Денежных выплат нет.</p><button class="pk-button primary" id="close-rules">Понятно</button></dialog><script>
+</style><script src="./vendor/supabase-2.118.0.js"></script><script src="./auth-config.js"></script><script src="./session-validation.js"></script><script src="./game-store.js"></script><script src="./tab-session.js"></script><script src="./game-guide.js"></script><script src="./cloud-checkpoint.js"></script><script src="./platform.js"></script><script src="./telegram.js" defer></script><script src="./poker-equity.js"></script></head><body><main class="pk-app" id="app"><div class="pk-panel">Подготавливаем стол…</div></main><dialog class="pk-dialog" id="rules"><h2>Твой первый Hold’em</h2><p>У тебя две карты. На стол откроются ещё пять. Побеждает лучшая комбинация из любых пяти доступных карт. При равенстве банк делится; дополнительные карты — кикеры — тоже учитываются.</p><p>Пас — выйти из раздачи. Чек — пропустить без ставки. Колл — уравнять. Рейз — повысить общую ставку до указанного значения. Ва-банк сохраняет право на свою часть банка.</p><p>Малый блайнд 20, большой 40. Перед каждым новым этапом есть пауза. Таймера на твой ход нет.</p><div class="pk-combo-list"><span>1 · Стрит-флеш</span><span>2 · Каре</span><span>3 · Фулл-хаус</span><span>4 · Флеш</span><span>5 · Стрит</span><span>6 · Тройка</span><span>7 · Две пары</span><span>8 · Пара</span><span>9 · Старшая карта</span></div><p>Это тренировка на игровые монеты: Вход за стол — 100 V за 1 000 фишек. Между раздачами фишки сохраняются. Заверши стол между раздачами: каждые 10 фишек вернут 1 V (неполная десятка округляется вниз). Денежных выплат нет.</p><button class="pk-button primary" id="close-rules">Понятно</button></dialog><script>
 (()=>{'use strict';
 // POKER_ENGINE_START
 const SUITS=['♠','♥','♦','♣'],RANKS=['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
@@ -179,27 +179,7 @@ function pokerBotDecision(g,i,style=pokerBotStyle(i)){
 }
 function botMove(g){const i=g.toAct;if(g.players[i]?.kind!=='bot')return false;const decision=pokerBotDecision(g,i);return !!decision&&pokerAction(g,i,decision.action,decision.amount)}
 
-function validPokerSave(value){
-  try{
-    const n=v=>Number.isInteger(v)&&v>=0&&v<=4000,id=v=>typeof v==='string'&&/^poker-[a-z0-9-]{3,95}$/.test(v);
-    if(!value||![2,3].includes(value.version)||!id(value.id)||!Array.isArray(value.players)||value.players.length!==4)return false;
-    const g=value,stageCards={preflop:0,flop:3,turn:4,river:5};
-    if(!Object.hasOwn(stageCards,g.stage)||!['betting','review','over'].includes(g.phase)||typeof g.over!=='boolean'||g.over!==(g.phase==='over'))return false;
-    if(![g.deck,g.burn,g.community,g.history].every(Array.isArray)||g.community.length!==stageCards[g.stage]||g.history.some(x=>typeof x!=='string'))return false;
-    if(!n(g.pot)||!n(g.currentBet)||!n(g.minRaise)||g.minRaise===0||!Number.isInteger(g.button)||g.button<0||g.button>3)return false;
-    if(!g.players.every((p,i)=>p&&typeof p.name==='string'&&p.name.length<=100&&p.kind===(i===0?'human':'bot')&&typeof p.folded==='boolean'&&Array.isArray(p.hand)&&[0,2].includes(p.hand.length)&&[p.chips,p.roundBet,p.totalBet].every(n)&&p.roundBet<=p.totalBet&&(!p.hand.length?p.folded:true)))return false;
-    const all=[...g.deck,...g.burn,...g.community,...g.players.flatMap(p=>p.hand)],deck=new Map(makeDeck().map(c=>[c.id,c]));
-    if(all.length!==52||new Set(all.map(c=>c?.id)).size!==52||all.some(c=>!deck.has(c?.id)||c.rank!==deck.get(c.id).rank||c.suit!==deck.get(c.id).suit||c.v!==deck.get(c.id).v))return false;
-    if(g.players.reduce((sum,p)=>sum+p.chips,0)+g.pot!==4000)return false;
-    const contributed=g.players.reduce((sum,p)=>sum+p.totalBet,0);
-    if(!g.over&&g.pot!==contributed)return false;
-    if(g.phase==='betting'&&(!Number.isInteger(g.toAct)||g.toAct<0||g.toAct>3||g.players[g.toAct].folded||!g.players[g.toAct].chips))return false;
-    if(g.phase!=='betting'&&g.toAct!==-1)return false;
-    if(g.version===3&&(!id(g.tableId)||!Number.isInteger(g.handNumber)||g.handNumber<1||!Array.isArray(g.handStartChips)||g.handStartChips.length!==4||!g.handStartChips.every(n)||g.handStartChips.reduce((a,b)=>a+b,0)!==4000||!Array.isArray(g.tableHistory)||g.tableHistory.some(h=>!h||!Number.isInteger(h.number)||!Number.isFinite(h.net)||!Array.isArray(h.winners)||h.winners.some(x=>typeof x!=='string'))))return false;
-    if(g.over&&(!n(g.paidPot)||g.paidPot!==contributed||!Array.isArray(g.prizes)||g.prizes.length!==4||!g.prizes.every(n)||g.prizes.reduce((a,b)=>a+b,0)!==g.paidPot||!Array.isArray(g.pots)||g.pots.some(p=>!p||!n(p.amount)||!Array.isArray(p.winners)||!p.winners.length||p.winners.some(i=>!Number.isInteger(i)||i<0||i>3))||g.payout!==Math.floor(g.players[0].chips/10)||g.profit!==g.payout-100))return false;
-    return true;
-  }catch{return false}
-}
+function validPokerSave(value){try{return !!globalThis.VEZDEHOT_SESSION_VALIDATION.validate('poker',value)}catch{return false}}
 // POKER_ENGINE_END
 const PROFILE_KEY='vezdehot_v2',STAGES={preflop:'Префлоп',flop:'Флоп',turn:'Тёрн',river:'Ривер'};
 let g=null,timer=null,ticket=0,sessionKey='',sessionScope='guest',profile={},preferences={},selectedRaise=0,error='';

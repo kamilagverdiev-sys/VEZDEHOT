@@ -2,7 +2,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
 const html=fs.readFileSync(path.join(__dirname,'../dist/monopoly.html'),'utf8'),engine=html.split("(function(){'use strict';")[1].split('// Engine ends here.')[0];
 let seed=7191,timer=0;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32},storage=new Map();
 const ctx={window:{},console,document:{hidden:false},Math:Object.assign(Object.create(Math),{random}),Date,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout:()=>++timer,clearTimeout(){},render(){}};
-vm.createContext(ctx);vm.runInContext(engine,ctx);
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),ctx);vm.runInContext(engine,ctx);
 const ui=html.split('// Engine ends here.')[1].split('function render(')[0];vm.runInContext(ui.slice(ui.indexOf('var groupMeta=')),ctx);
 let checks=0;function test(name,fn){fn();checks++;console.log('PASS '+name)}
 function fresh(diff='normal'){ctx.game=ctx.newGame();ctx.game.diff=diff;ctx.saved={nick:'Тест',balance:10000};ctx.initialized=true;return ctx.game}

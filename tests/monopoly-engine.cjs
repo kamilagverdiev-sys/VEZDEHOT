@@ -4,7 +4,7 @@ const engine=html.split("(function(){'use strict';")[1].split('// Engine ends he
 let timers=new Map(),id=0,seed=90123,records=[];
 const storage=new Map();const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/2**32};
 const ctx={window:{},console,document:{hidden:false},Math:Object.assign(Object.create(Math),{random}),Date,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout:(fn,delay)=>{const t=++id;timers.set(t,{fn,delay});return t},clearTimeout:t=>timers.delete(t),render(){}};
-vm.createContext(ctx);vm.runInContext(engine,ctx);
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../dist/session-validation.js'),'utf8'),ctx);vm.runInContext(engine,ctx);
 let count=0;function test(name,fn){fn();count++;console.log('PASS '+name)}
 function fresh(){ctx.cancelTimer();ctx.document.hidden=false;ctx.saved={nick:'Tester',balance:10000};ctx.balance=10000;ctx.game=ctx.newGame();ctx.initialized=true;return ctx.game}
 function total(g){return g.players.reduce((s,p)=>s+p.money,0)+g.bank}

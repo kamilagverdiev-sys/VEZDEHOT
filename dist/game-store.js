@@ -11,6 +11,9 @@
   const records = new Map();
   const validators = new Map();
   const announced = new Map();
+  const loaded = new Set();
+  const observedHeads = new Map();
+  const importFences = new Set();
   const messages = {
     empty: 'Нет сохранённой партии.',
     saved: 'Партия сохранена на этом устройстве.',
@@ -42,11 +45,36 @@
     if (root.localStorage) root.localStorage.setItem(key, raw);
     else localStorage.setItem(key, raw);
   }
-  function canWrite() {
+  function canWrite(scope, access) {
     try {
       const session = root.VEZDEHOT_TAB_SESSION;
+      if (access?.contextCurrent && access.contextCurrent() !== true) return false;
+      if (session && typeof session.status === 'function') {
+        const status = session.status();
+        if (status && Object.prototype.hasOwnProperty.call(status, 'scope') && status.scope !== scope) return false;
+      }
+      if (access?.raw) {
+        if (!session) return false;
+        const check = typeof session.ownsLock === 'function' ? session.ownsLock : session.canWrite;
+        return typeof check === 'function' && check.call(session) === true;
+      }
       return !session || typeof session.canWrite !== 'function' || session.canWrite() === true;
     } catch (_) { return false; }
+  }
+  function observeHead(key) {
+    try { observedHeads.set(key, get(key)); } catch (_) { /* Unavailable reads retain the last observed head. */ }
+  }
+  function staleHead(key) {
+    if (importFences.has(key)) return true;
+    if (!observedHeads.has(key)) return false;
+    try { return observedHeads.get(key) !== get(key); } catch (_) { return false; }
+  }
+  function denyStale(game, scope, validate) {
+    const key = keyFor(game, scope), cached = records.get(key);
+    if (cached) cached.pending = false;
+    const entry = inspect(game, scope, validate);
+    entry.status = 'unavailable'; entry.message = messages.conflict;
+    return writeResult(entry, false);
   }
   function validatorFor(key, options) {
     if (options && typeof options.validate === 'function') validators.set(key, options.validate);
@@ -123,7 +151,7 @@
     }
   }
 
-  function archiveCorrupt(key, raw) {
+  function archiveCorrupt(key, raw, write) {
     if (raw === null) return;
     // Content-addressing deduplicates retries without deleting an earlier damaged
     // record. An oversized original stays in place instead of being destroyed.
@@ -133,16 +161,20 @@
     const archiveKey = key + ':corrupt:' + raw.length + ':' + (hash >>> 0).toString(16);
     const previous = get(archiveKey);
     if (previous !== null && previous !== raw) throw new Error('archive-collision');
-    if (previous === null) put(archiveKey, raw);
+    if (previous === null) write(archiveKey, raw);
   }
 
-  function persist(key, entry, validate) {
-    if (!canWrite()) {
+  function persist(key, entry, validate, access) {
+    if (!canWrite(entry.envelope.scope, access)) {
       entry.status = 'unavailable'; entry.message = messages.readonly;
       return writeResult(entry, false);
     }
     try {
       const envelope = entry.envelope;
+      const write = (name, value) => {
+        if (!canWrite(envelope.scope, access)) throw new Error('ownership');
+        put(name, value);
+      };
       const raw = stringify(envelope);
       const data = disk(envelope.game, envelope.scope, validate);
       if (data.primary.kind === 'valid' && data.primary.raw === raw) {
@@ -158,32 +190,31 @@
         current.status = 'unavailable'; current.message = messages.conflict;
         return writeResult(current, false);
       }
-      if (data.primary.kind === 'corrupt') archiveCorrupt(key, data.primary.raw);
+      if (data.primary.kind === 'corrupt') archiveCorrupt(key, data.primary.raw, write);
       if (data.primary.kind === 'valid') {
-        if (data.backup.kind === 'corrupt') archiveCorrupt(key + ':backup', data.backup.raw);
+        if (data.backup.kind === 'corrupt') archiveCorrupt(key + ':backup', data.backup.raw, write);
         // Backup must commit first. If it cannot, retain the primary as well.
-        if (data.backup.raw !== data.primary.raw) put(key + ':backup', data.primary.raw);
+        if (data.backup.raw !== data.primary.raw) write(key + ':backup', data.primary.raw);
       }
-      if (!canWrite()) throw new Error('ownership');
-      put(key, raw);
+      write(key, raw);
       entry.pending = false; entry.status = envelope.payload === null ? 'empty' : 'saved'; entry.message = messages[entry.status];
       return writeResult(entry, true);
-    } catch (_) {
-      entry.pending = true; entry.status = 'unavailable'; entry.message = messages.unavailable;
+    } catch (error) {
+      entry.pending = error?.message !== 'ownership'; entry.status = 'unavailable'; entry.message = entry.pending ? messages.unavailable : messages.readonly;
       return writeResult(entry, false);
     }
   }
 
-  function save(game, scope, state, options) {
+  function save(game, scope, state, options, access) {
     const key = keyFor(game, scope);
     if (!key) return writeResult(invalidEntry(), false);
     const validate = validatorFor(key, options);
-    if (!canWrite()) {
+    if (!canWrite(scope, access)) {
       const previous = records.get(key) || inspect(game, scope, validate);
       // A denied write must not become a queued stale action for a future owner.
-      previous.status = 'unavailable'; previous.message = messages.readonly;
-      return writeResult(previous, false);
+      return writeResult({...previous, status: 'unavailable', message: messages.readonly}, false);
     }
+    if (!access?.raw && staleHead(key)) return denyStale(game, scope, validate);
     let payload;
     try { payload = validPayload(state, validate); }
     catch (_) {
@@ -205,10 +236,12 @@
       return writeResult(previous, false);
     }
     const entry = remember(key, envelope, 'unavailable', messages.unavailable, true);
-    return persist(key, entry, validate);
+    const output = persist(key, entry, validate, access);
+    observeHead(key);
+    return output;
   }
 
-  function load(game, scope, options) {
+  function load(game, scope, options, access) {
     const key = keyFor(game, scope);
     if (!key) return result(invalidEntry());
     const validate = validatorFor(key, options);
@@ -231,11 +264,11 @@
         if (value == null) continue;
         payload = validPayload(value, validate);
       } catch (_) { corruptLegacy = true; continue; }
-      if (!canWrite()) {
+      if (!canWrite(scope, access)) {
         entry.status = 'unavailable'; entry.message = messages.readonly;
         return {state: payload, status: 'unavailable', message: messages.readonly, revision: 0};
       }
-      const migrated = save(game, scope, payload, {validate});
+      const migrated = save(game, scope, payload, {validate}, access);
       const current = records.get(key);
       if (migrated.ok) current.message = 'Прежнее сохранение проверено и перенесено в новую версию. Исходная копия сохранена.';
       return result(current);
@@ -256,8 +289,79 @@
     const key = keyFor(game, scope);
     if (!key) return writeResult(invalidEntry(), false);
     const entry = records.get(key) || inspect(game, scope, validators.get(key));
+    if (!canWrite(scope)) return writeResult({...entry, status: 'unavailable', message: messages.readonly}, false);
+    if (staleHead(key)) return denyStale(game, scope, validators.get(key));
     if (!entry.pending) return writeResult(entry, ['empty', 'saved', 'recovered'].includes(entry.status));
-    return persist(key, entry, validators.get(key));
+    const output = persist(key, entry, validators.get(key)); observeHead(key); return output;
+  }
+
+  function sharedValidator(game, remote) {
+    const shared = root.VEZDEHOT_SESSION_VALIDATION;
+    if (!shared || typeof shared.validate !== 'function') throw new Error('validator');
+    return state => shared.validate(game, state, {remote: !!remote});
+  }
+  function legacyKeys(game, scope) {
+    if (game !== 'durak' && game !== 'bunker') return [{key: ({poker: 'vezdehot_poker_v2_', mafia: 'vezdehot_mafia_v3_', monopoly: 'vezdehot_monopoly_v3_'})[game] + scope}];
+    const select = value => {
+      if (!object(value) || Array.isArray(value)) throw new Error('legacy');
+      if (value.savedGames != null && (!object(value.savedGames) || Array.isArray(value.savedGames))) throw new Error('legacy');
+      if (value.savedGames && Object.prototype.hasOwnProperty.call(value.savedGames, game)) return value.savedGames[game];
+      if (value.game == null) return null;
+      const kind = Array.isArray(value.game.deck) ? 'durak' : Array.isArray(value.game.players?.[0]?.cards) ? 'bunker' : null;
+      if (!kind) throw new Error('legacy');
+      return kind === game ? value.game : null;
+    };
+    return [{key: 'vezdehot:main:' + scope, select}, ...(scope === 'guest' ? [{key: 'vezdehot_v2', select}, {key: 'uniq_play_v1', select}] : [])];
+  }
+  function exportAll(scope, options = {}) {
+    const output = {ok: false, games: {}, revisions: {}, message: ''};
+    if (!keyFor('durak', scope)) { output.message = messages.invalid; return output; }
+    const access = {raw: true, contextCurrent: options.contextCurrent};
+    if (options.contextCurrent !== undefined && typeof options.contextCurrent !== 'function' || !canWrite(scope, access)) { output.message = messages.readonly; return output; }
+    try {
+      for (const game of games) {
+        const key = keyFor(game, scope), previous = records.get(key);
+        if (previous && (previous.pending || ['corrupt', 'unavailable'].includes(previous.status))) throw new Error(previous.message);
+        const validate = sharedValidator(game, false);
+        const value = withNotice(game, scope, () => load(game, scope, {validate, legacyKeys: legacyKeys(game, scope)}, access));
+        const current = records.get(key);
+        if (current?.pending || ['corrupt', 'unavailable'].includes(value.status)) throw new Error(value.message);
+        output.games[game] = clone(value.state); output.revisions[game] = value.revision;
+      }
+      if (!canWrite(scope, access)) throw new Error(messages.readonly);
+      output.ok = true; output.message = 'Партии проверены для синхронизации.';
+    } catch (error) { output.games = {}; output.revisions = {}; output.message = error?.message === 'validator' ? 'Проверка игровых сохранений ещё не готова.' : error?.message || messages.invalid; }
+    return output;
+  }
+  function installAll(scope, snapshots, options = {}) {
+    const access = {raw: true, contextCurrent: options.contextCurrent};
+    if (!keyFor('durak', scope) || typeof options.contextCurrent !== 'function' || !canWrite(scope, access)) return {ok: false, message: messages.readonly};
+    if (!object(snapshots) || Array.isArray(snapshots) || Object.keys(snapshots).length !== games.size || [...games].some(game => !Object.prototype.hasOwnProperty.call(snapshots, game))) return {ok: false, message: messages.invalid};
+    const prepared = [];
+    try {
+      // Validate every game before changing any durable data or installing a fence.
+      for (const game of games) {
+        const key = keyFor(game, scope), validate = sharedValidator(game, true);
+        const payload = validPayload(snapshots[game], validate);
+        const data = disk(game, scope, sharedValidator(game, false));
+        const revision = Math.max(records.get(key)?.envelope?.revision || 0, data.primary.envelope?.revision || 0, data.backup.envelope?.revision || 0);
+        if (revision >= Number.MAX_SAFE_INTEGER) throw new Error('revision');
+        const envelope = {format: FORMAT, version: VERSION, game, scope, revision: revision + 1, updatedAt: Date.now(), payload};
+        stringify(envelope); prepared.push({key, game, envelope});
+      }
+      if (!canWrite(scope, access)) return {ok: false, message: messages.readonly};
+      for (const item of prepared) if (loaded.has(item.key)) importFences.add(item.key);
+      for (const item of prepared) {
+        if (!canWrite(scope, access)) return {ok: false, message: messages.readonly};
+        const validate = sharedValidator(item.game, false);
+        const output = withNotice(item.game, scope, () => {
+          const entry = remember(item.key, item.envelope, 'unavailable', messages.unavailable, true);
+          return persist(item.key, entry, validate, access);
+        });
+        if (!output.ok) return {ok: false, message: output.message};
+      }
+      return {ok: true, message: 'Облачные партии сохранены на этом устройстве.'};
+    } catch (error) { return {ok: false, message: error?.message === 'validator' ? 'Проверка игровых сохранений ещё не готова.' : messages.invalid}; }
   }
 
   function withNotice(game, scope, action) {
@@ -278,10 +382,10 @@
   }
 
   root.VEZDEHOT_GAME_STORE = Object.freeze({
-    load: (game, scope, options) => withNotice(game, scope, () => load(game, scope, options)),
+    load: (game, scope, options) => withNotice(game, scope, () => {const key = keyFor(game, scope); if (key) loaded.add(key); const output = load(game, scope, options); if (key) observeHead(key); return output;}),
     save: (game, scope, state, options) => withNotice(game, scope, () => save(game, scope, state, options)),
     clear: (game, scope) => withNotice(game, scope, () => save(game, scope, null)),
     retry: (game, scope) => withNotice(game, scope, () => retry(game, scope)),
-    status, peek
+    status, peek, exportAll, installAll
   });
 })(window);
