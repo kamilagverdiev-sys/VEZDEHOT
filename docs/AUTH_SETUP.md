@@ -2,7 +2,7 @@
 
 Повторная проверка 25 октября 2026 года: публичный `/auth/v1/settings` вернул `external.anonymous_users: false`, `external.google: false`, `disable_signup: false`. Локальный гостевой режим работает самостоятельно. Google и Telegram OIDC требуют настройки credentials; Telegram Mini App использует отдельную серверную проверку подписанных данных. Наличие кнопки не подтверждает успешный вход: аккаунт появляется только после подтверждённой Supabase session.
 
-В этой проверке не было подключённого пользовательского браузера или реального Telegram Mini App. Поэтому настоящий Google/Telegram-вход и перенос телефон → ПК остаются **не проверены**. Проверки с тестовым сервисом и успешные SQL-сценарии подтверждают клиентскую и серверную логику сохранений, но не заменяют вход владельца.
+Вход владельца в панель Supabase через GitHub подтверждён 25 октября 2026 года. Это административный вход, а не вход игрока в VEZDEHOT: настоящий Google/Telegram-вход в игру и перенос телефон → ПК остаются **не проверены**. Проверки с тестовым сервисом и успешные SQL-сценарии подтверждают клиентскую и серверную логику сохранений, но не заменяют вход владельца в игру.
 
 ## Адреса
 
@@ -16,6 +16,8 @@
 | Supabase Additional Redirect URLs — Sites | `https://vezdehot.greysquid7.chatgpt.site/auth-callback.html` |
 
 Callback из карточки провайдера в Supabase должен совпадать с первым адресом. У Google/Telegram указывается callback **Supabase**, а в Supabase разрешаются конечные адреса **приложения**. Добавляйте точные production-адреса; wildcard для всех доменов не нужен. Приложение возвращает пользователя на callback своего текущего origin.
+
+25 октября в живой панели исправлен Site URL с `http://localhost:3000` на production Vercel и сохранены оба точных Additional Redirect URLs из таблицы. До исправления список был пуст. Панель подтвердила сохранение двух URL; настройка не включает сам Google provider.
 
 ## Google
 
@@ -35,7 +37,9 @@ Callback из карточки провайдера в Supabase должен с�
 
 Для завершения настройки владелец вводит Client Secret непосредственно на [странице Google-провайдера Supabase](https://supabase.com/dashboard/project/cyzbraifdkrqicdsbuwe/auth/providers?provider=Google). Присылать секрет в чат или добавлять его в Git не нужно. На момент проверки подключённый Supabase connector не предоставлял операции изменения Auth configuration; сам факт доступа к таблицам не даёт Google OAuth credentials.
 
-Дополнительно проверены проекты CRM/FORMA. Production CRM использует отдельный Supabase `znoafaphmqtlwyuskhkb`; доступ к его управлению через текущий connector отклонён. В репозитории есть компонент Google OAuth, который проверяет доступность провайдера, но наличие компонента не подтверждает работающую конфигурацию. В metadata переменных Vercel нет Google OAuth credentials, значения секретов не экспортировались. Настройка CRM не переносилась в VEZDEHOT. Панель Auth VEZDEHOT открывается в облачном браузере, но требует отдельного входа в Supabase.
+Дополнительно проверены проекты CRM/FORMA. Production CRM использует отдельный Supabase `znoafaphmqtlwyuskhkb`; доступ к его управлению через текущий connector отклонён. В репозитории есть компонент Google OAuth, который проверяет доступность провайдера, но наличие компонента не подтверждает работающую конфигурацию. В metadata переменных Vercel нет Google OAuth credentials, значения секретов не экспортировались. Настройка CRM не переносилась в VEZDEHOT.
+
+После входа в Dashboard подтверждено: Google в VEZDEHOT выключен, Client IDs и Client Secret не настроены. Google Cloud Console (`https://console.cloud.google.com/auth/clients`) вернул в текущем облачном браузере `Site Unavailable`, повторное открытие не помогло. Это не доказательство блокировки аккаунта или недоступности сервиса у владельца. Создание/выбор Google Web OAuth client и ввод его секрета непосредственно в Supabase остаются незавершёнными; секрет не следует присылать в чат.
 
 ## Telegram Mini App: вход внутри бота
 
