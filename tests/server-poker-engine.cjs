@@ -107,6 +107,41 @@ test('closing an active hand keeps chips conserved without inventing a winner or
   assert.equal(view.pot,state.game.pot);assert.deepEqual(closed.game.players,state.game.players);
   assert.throws(()=>e.applyAction(closed,{type:'nextHand'}),{code:'illegal_action'});
   assert.deepEqual(e.applyAction(state,{type:'resign'}),closed);
+  assert.deepEqual(view.economy,{version:1,stake:0,settled:true,payout:0,xp:0,outcome:'resigned'});
+});
+
+test('paid poker cannot cash out midhand and carries one entry through subsequent deals',async()=>{
+ const [e]=await ready;let state=e.createGame({id:tableId,stake:100},rng(4),ids());
+ assert.deepEqual(state.economy,{version:1,stake:100,settled:false,payout:0,xp:0,outcome:null});
+ assert(!e.legalActions(state).actions.includes('close'));
+ for(const type of ['close','resign'])assert.throws(()=>e.applyAction(state,{type}),{code:'illegal_action'});
+ state=finishHand(e,state);assert(!state.over);assert(e.legalActions(state).actions.includes('close'));assert.equal(state.economy.settled,false);
+ state=e.applyAction(state,{type:'nextHand'},rng(61),ids());assert.equal(state.game.handNumber,2);assert.equal(state.id,tableId);assert.equal(state.economy.stake,100);assert.equal(state.economy.settled,false);
+ assert(!e.legalActions(state).actions.includes('close'));state=finishHand(e,state,rng(89));
+ if(!state.over){state.game.payout=99999;state.game.win=true;state=e.applyAction(state,{type:'close'});}
+ const expected=Math.floor(state.game.players[0].chips/10),outcome=expected>100?'win':expected===100?'draw':'loss';
+ assert.deepEqual(state.economy,{version:1,stake:100,settled:true,payout:expected,xp:{win:90,draw:40,loss:20}[outcome],outcome});
+ assert.deepEqual(e.projectGame(state).economy,state.economy);
+});
+test('paid poker settles real completed wins, draws, losses and busts from the remaining chips',async()=>{
+ const [e]=await ready;
+ for(const [seed,payout,xp,outcome] of [[1,108,90,'win'],[2,100,40,'draw'],[4,96,20,'loss'],[5,0,20,'loss']]){
+  let state=finishHand(e,e.createGame({id:tableId,stake:100},rng(seed),ids()));
+  const automaticallyClosed=state.game.players[0].chips===0;
+  assert.equal(state.over,automaticallyClosed);
+  if(!state.over)state=e.applyAction(state,{type:'close'});
+  assert.deepEqual(state.economy,{version:1,stake:100,settled:true,payout,xp,outcome});
+  assert.equal(payout,Math.floor(state.game.players[0].chips/10));
+  assert.throws(()=>e.applyAction(state,{type:'close'}),{code:'illegal_action'});
+ }
+});
+test('poker rejects malformed stakes and forged settlement while legacy tables stay free',async()=>{
+ const [e]=await ready;
+ for(const stake of [null,-1,1,100.5,500,'100'])assert.throws(()=>e.createGame({id:tableId,stake},rng(),ids()),{code:'invalid_request'});
+ const state=e.createGame({id:tableId,stake:100},rng(4),ids());
+ for(const mutate of [x=>x.stake=500,x=>x.payout=100,x=>x.xp=90,x=>x.settled=true,x=>x.outcome='win',x=>x.extra=1]){const bad=structuredClone(state);mutate(bad.economy);assert.throws(()=>e.projectGame(bad),{code:'invalid_server_state'});}
+ const legacy=structuredClone(state);delete legacy.economy;assert.equal(e.projectGame(legacy).economy.stake,0);assert(e.legalActions(legacy).actions.includes('close'));
+ assert.deepEqual(e.applyAction(legacy,{type:'close'}).economy,{version:1,stake:0,settled:true,payout:0,xp:0,outcome:'resigned'});
 });
 
 test('hidden opponent cards and live deck never affect a bot public-information estimate or decision',async()=>{
@@ -137,7 +172,7 @@ test('corrupt stored cards, chips, identity and hand outcome fail closed',async(
 test('90 seeded continuous server tables preserve cards/chips through all difficulties and busts',async()=>{
   const [e]=await ready;let hands=0,steps=0,headsup=0;
   for(let trial=0;trial<90;trial++){
-    const random=rng(trial+1000),uuid=ids();let state=e.createGame({id:tableId,difficulty:['easy','normal','hard'][trial%3]},random,uuid),count=0;
+    const random=rng(trial+1000),uuid=ids(),stake=trial%2?100:0;let state=e.createGame({id:tableId,difficulty:['easy','normal','hard'][trial%3],stake},random,uuid),count=0;
     while(!state.over&&count++<2500){
       e.assertIntegrity(state);const view=checkPrivacy(e,state),legal=view.legal;
       let action;
@@ -150,6 +185,7 @@ test('90 seeded continuous server tables preserve cards/chips through all diffic
     }
     assert(state.over,'a table terminates without stalling');assert(state.game.over);assert(state.game.players[0].chips===0||state.game.players.filter(p=>p.chips>0).length===1);
     checkPrivacy(e,state);assert.deepEqual(e.legalActions(state).actions,[]);
+    assert.equal(state.economy.stake,stake);assert(state.economy.settled);assert.equal(state.economy.payout,stake?Math.floor(state.game.players[0].chips/10):0);assert.equal(state.economy.xp,stake?(state.game.players[0].chips>1000?90:state.game.players[0].chips===1000?40:20):0);
   }
   assert(hands>0);assert(steps>90);assert(headsup>0);
 });

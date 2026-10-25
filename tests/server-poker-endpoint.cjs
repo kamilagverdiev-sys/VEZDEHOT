@@ -31,6 +31,7 @@ function memoryService(options={}) {
   }
   if(route.endsWith('/server_poker_commit')) {
    if(receipt)return Response.json({receipt:receipt.response});
+   if(options.insufficientFunds)return Response.json({code:'P0001',message:'insufficient_funds'},{status:400});
    if(options.conflictOnCommit){store.revision++;return Response.json({conflict:true,revision:store.revision,state:store.state});}
    if(body.p_expected_revision!==store.revision)return Response.json({conflict:true,revision:store.revision,state:store.state});
    assert.equal(body.p_response.revision,store.revision+1);assert.equal(body.p_response.status,'saved');assert.equal(body.p_response.game.id,body.p_state.id);
@@ -105,6 +106,19 @@ test('poker commit race returns current public state instead of a guessed deal',
 test('poker service failures do not leak secrets or internal database messages',async()=>{
  const s=await setup({readFailure:true}),result=await json(s,{op:'load'});assert.equal(result.status,503);assert.deepEqual(result.data,{error:'server_unavailable'});
  const auth=await setup({authStatus:503});assert.equal((await json(auth,{op:'load'})).status,503);assert.equal(auth.calls.length,1);
+});
+test('poker optional stake accepts only fixed modes and paid start replays without a second entry',async()=>{
+ const s=await setup();for(const stake of [null,-1,1,100.5,500,'100'])assert.equal((await json(s,{...start(0),stake})).status,400);assert.equal(s.calls.length,0);
+ const body={...start(0),stake:100},first=await json(s,body);assert.equal(first.status,200);assert.equal(first.data.game.economy.stake,100);assert.equal(first.data.game.economy.settled,false);
+ assert.deepEqual(await json(s,body),first);assert.equal(s.store.revision,1);assert.equal((await json(s,{...body,stake:0})).status,409);
+ const before=clone(s.store.state),rejected=await json(s,action(1,first.data.game.id,'close'));assert.equal(rejected.status,422);assert.equal(rejected.data.error,'illegal_action');assert.deepEqual(s.store.state,before);assert.equal(s.store.revision,1);
+ const hand=await finishHand(s,first.data);assert.equal(hand.game.economy.settled,false);
+ const result=await json(s,action(hand.revision,hand.game.id,'close'));assert.equal(result.status,200);assert(result.data.game.economy.settled);assert.equal(result.data.game.economy.payout,Math.floor(result.data.game.players[0].chips/10));
+});
+test('poker insufficient balance returns an actionable rejection and does not commit the candidate deal',async()=>{
+ const s=await setup({insufficientFunds:true}),body={...start(0),stake:100},result=await json(s,body);
+ assert.equal(result.status,422);assert.deepEqual(result.data,{error:'insufficient_funds'});assert.equal(s.store.state,null);assert.equal(s.store.revision,0);assert.equal(s.store.receipts.size,0);
+ s.options.insufficientFunds=false;assert.equal((await json(s,body)).status,200);assert.equal(s.store.revision,1);
 });
 
 async function finishHand(s,view) {

@@ -5,6 +5,7 @@ window.VEZDEHOT_AUTH_CONFIG = Object.freeze({
   checkpointsEnabled: true,
   serverDurakUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-durak',
   serverPokerUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-poker',
+  serverWalletUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-wallet',
   googleEnabled: false,
   telegramEnabled: false,
   telegramProvider: 'custom:telegram',

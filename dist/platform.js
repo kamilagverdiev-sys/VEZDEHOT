@@ -234,8 +234,9 @@ async function login(provider,link=false){
 }
 async function signOut(){if(!ownsProfile()||!client||!user||accountSwitching)return;const id=user.id;await sync();if(!ownsProfile()||user?.id!==id||scope!==id)return;const {error}=await bounded(client.auth.signOut({scope:'local'}));if(error)throw new Error('Не удалось выйти. Проверь соединение и повтори.');await activate(null)}
 async function serverGameRequest(game,body){
-  // Only these two fixed routes can receive the current user's bearer token.
-  const endpoint=config[game==='poker'?'serverPokerUrl':'serverDurakUrl'],expected=typeof config.url==='string'?config.url.replace(/\/$/,'')+'/functions/v1/server-'+game:'';
+  // Only these fixed routes can receive the current user's bearer token.
+  const route={durak:'serverDurakUrl',poker:'serverPokerUrl',wallet:'serverWalletUrl'}[game];
+  const endpoint=route?config[route]:null,expected=typeof config.url==='string'?config.url.replace(/\/$/,'')+'/functions/v1/server-'+game:'';
   if(!endpoint||endpoint!==expected)throw new Error('Серверный стол пока недоступен.');
   if(!client||!user||user.is_anonymous||scope!==user.id||hydrating||accountSwitching||authPending||!ownsProfile())throw new Error('Для серверного стола войди в аккаунт в активной вкладке.');
   let encoded;try{if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();encoded=JSON.stringify(body);if(encoded.length>16384)throw new Error()}catch{throw new Error('Не удалось подготовить действие стола.')}
@@ -253,6 +254,7 @@ async function serverGameRequest(game,body){
 }
 function serverDurakRequest(body){return serverGameRequest('durak',body)}
 function serverPokerRequest(body){return serverGameRequest('poker',body)}
+function serverWalletRequest(body){return serverGameRequest('wallet',body)}
 function canImportGuest(){
   const eligible=!!(gameplayWritable()&&user&&cloudHydrated&&!hydrating&&profile.games===0&&profile.xp===0&&profile.wins===0&&profile.balance===BASE.balance&&!profile.history.length&&!read('vezdehot:guest-import:'+user.id,false)&&read(PREFIX+'guest',{}).games>0);
   if(!eligible||!checkpointsEnabled)return eligible;
@@ -461,7 +463,7 @@ function accountMessage(a){if(authError)return authError;if(a.user)return 'ID а
 function refreshAccountProviders(){refreshCheckpointUI();const modal=document.querySelector('#vh-account');if(!modal)return;const oldCard=modal.querySelector('[data-checkpoint-card]');if(oldCard)oldCard.outerHTML=checkpointCard();const a=account(),state=modal.querySelector('[data-save-state]');if(state){state.hidden=checkpointsEnabled&&!!a.user&&a.storagePersisted;state.dataset.status=!a.storagePersisted?'warning':a.loading?'loading':a.status;modal.querySelector('[data-save-state-copy]').textContent=savingMessage(a);modal.querySelector('[data-profile-balance]').innerHTML=prettyNumber(profile.balance)+' <em>V</em>';const retry=modal.querySelector('[data-sync-profile]');retry.hidden=!a.user||a.loading||a.switching||a.status!=='offline';retry.disabled=a.loading||a.switching;modal.querySelector('[data-save-profile]').disabled=a.loading||a.switching||!gameplayWritable();modal.querySelector('[data-account-exit]').disabled=a.loading||a.switching}const message=modal.querySelector('.vh-auth-message');if(message)message.textContent=accountMessage(a);modal.querySelectorAll('[data-provider]').forEach(b=>{const v=b.dataset.provider,p=providerPresentation(v,a);b.disabled=p.disabled;b.innerHTML=`<span>${v==='google'?'G':'↗'}</span>${p.text}${p.hint?'<small>'+p.hint+'</small>':''}`})}
 document.addEventListener('vezdehot:accountchange',()=>activeDialog?.close(false));
 document.addEventListener('vezdehot:telegramready',()=>{refreshTelegramProvider();refreshAccountProviders();emit()});
-window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,serverDurakRequest,serverPokerRequest,toast,avatars};
+window.VEZDEHOT={ready,getProfile,updateProfile,recordResult,scopeKey:()=>scope,saveMainState,loadMainState,account,openAccount,openHistory,getHistory,getHistorySummary,login,signOut,sync,checkpointStatus,acceptCloud,retryImport,exportLocalCheckpoint,importGuest,canImportGuest,renderSaveNotice,bindSaveNotice,serverDurakRequest,serverPokerRequest,serverWalletRequest,toast,avatars};
 window.addEventListener('online',()=>{if(!ownsProfile())return;if(checkpointsEnabled){if(user&&!accountSwitching)sync({pull:true});return}if(user&&!cloudHydrated&&!hydrating&&!accountSwitching){activationFlight=activate({user});activationFlight.catch(()=>{})}else queueSync()});
 document.addEventListener('visibilitychange',()=>{if(checkpointsEnabled){if(ownsProfile()&&checkpoint&&!accountSwitching)sync({pull:!document.hidden});return}if(document.hidden&&profile.dirty)sync()});
 document.addEventListener('vezdehot:sessionactive',()=>{if(checkpointsEnabled&&booted&&checkpoint&&!accountSwitching)sync({pull:true})});

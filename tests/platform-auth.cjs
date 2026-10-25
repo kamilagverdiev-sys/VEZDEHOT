@@ -282,8 +282,8 @@ test('callback shows OAuth failure ahead of an older signed-in session and clear
   assert.equal(nodes.title.textContent,'Вход не завершён');assert.match(nodes.status.textContent,/Ранее открытый аккаунт/);assert.equal(replaced[0][2],'/auth-callback.html');
 });
 
-for(const game of ['durak','poker']){
-const configKey=game==='poker'?'serverPokerUrl':'serverDurakUrl',method=game==='poker'?'serverPokerRequest':'serverDurakRequest',path='/server-'+game;
+for(const game of ['durak','poker','wallet']){
+const configKey={poker:'serverPokerUrl',durak:'serverDurakUrl',wallet:'serverWalletUrl'}[game],method={poker:'serverPokerRequest',durak:'serverDurakRequest',wallet:'serverWalletRequest'}[game],path='/server-'+game;
 test('server '+game+' uses only configured endpoint and keeps the access token inside transport',async t=>{
   const h=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed player')},fetch:async input=>String(input).endsWith(path)?{ok:true,status:200,json:async()=>({state:null,revision:0})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
   const result=await h.api[method]({op:'load'}),request=h.requests.find(x=>String(x.input).endsWith(path));

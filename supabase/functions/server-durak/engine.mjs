@@ -9,11 +9,27 @@ const suits = ['♠','♥','♦','♣'];
 export const secureRandom = () => crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
 function rules(random=secureRandom, id='', nick='Ты') { return createCore({random,id,nick}); }
 const publicCard = card => card ? {id:card.id,rank:card.rank,suit:card.suit,color:card.color} : null;
+const economyKeys=['version','stake','settled','payout','xp','outcome'];
+function economyFor(g,stake=0) {
+  const outcome=!g.over?null:g.resigned===true?'resigned':g.draw?'draw':g.finished.includes(0)?'win':'loss';
+  return {version:1,stake,settled:g.over,payout:stake?(outcome==='win'?stake*g.players.length:outcome==='draw'?stake:0):0,xp:stake?({win:80,draw:40,loss:25}[outcome]||0):0,outcome};
+}
+function checkEconomy(g) {
+  if(g.economy===undefined)return; // Existing server practice stays free.
+  const e=g.economy;
+  if(!e||typeof e!=='object'||Array.isArray(e)||![0,100].includes(e.stake)||Object.keys(e).length!==economyKeys.length||economyKeys.some(k=>e[k]!==economyFor(g,e.stake)[k]))throw new GameError('invalid_server_state',503);
+}
 
 export function assertIntegrity(g) {
   if (!g || g.engineVersion!==3 || !Array.isArray(g.players) || g.players.length<2 || g.players.length>4 || !Array.isArray(g.deck) || !Array.isArray(g.table) || !Array.isArray(g.finished) || !Number.isInteger(g.discardCount) || g.discardCount<0 || g.discardCount>36) throw new GameError('invalid_server_state',503);
   const cards = [...g.deck,...g.players.flatMap(p=>p.hand),...g.table.flatMap(p=>p.d?[p.a,p.d]:[p.a])];
   if (cards.length+g.discardCount!==36 || new Set(cards.map(c=>c?.id)).size!==cards.length || cards.some(c=>!c||!ranks.includes(c.rank)||!suits.includes(c.suit)||c.id!==c.rank+c.suit)||!['attack','defend','resolve','roundEnd','over'].includes(g.phase)||!Number.isInteger(g.attacker)||!g.players[g.attacker]||!Number.isInteger(g.defender)||!g.players[g.defender]||g.attacker===g.defender) throw new GameError('invalid_server_state',503);
+  if(typeof g.over!=='boolean'||typeof g.draw!=='boolean'||g.over!==(g.phase==='over')||new Set(g.finished).size!==g.finished.length||g.finished.some(i=>!Number.isInteger(i)||!g.players[i]||g.players[i].hand.length)||(g.finished.length&&g.deck.length))throw new GameError('invalid_server_state',503);
+  if(g.over&&g.resigned!==true){
+    const active=g.players.map((p,i)=>p.hand.length?i:null).filter(i=>i!==null);
+    if(g.deck.length||g.table.length||active.length>1||g.draw!==(active.length===0)||g.loser!==(active[0]??null)||g.finished.length!==g.players.length-active.length)throw new GameError('invalid_server_state',503);
+  }
+  checkEconomy(g);
 }
 function runBots(g, core) {
   // One attack/defence at most before a human turn or explicit review pause.
@@ -31,10 +47,10 @@ function runBots(g, core) {
     } else break;
   }
 }
-export function createGame({bots=1,difficulty='normal',nick='Ты',id=crypto.randomUUID()}={},random=secureRandom) {
-  if(!Number.isInteger(bots)||bots<1||bots>3||!['easy','normal','hard'].includes(difficulty)) throw new GameError('invalid_request',400);
+export function createGame({bots=1,difficulty='normal',nick='Ты',id=crypto.randomUUID(),stake=0}={},random=secureRandom) {
+  if(!Number.isInteger(bots)||bots<1||bots>3||!['easy','normal','hard'].includes(difficulty)||![0,100].includes(stake)) throw new GameError('invalid_request',400);
   const core=rules(random,id,nick),g=core.newGame({bots,diff:difficulty,stake:0});
-  runBots(g,core);assertIntegrity(g);return g;
+  runBots(g,core);g.economy=economyFor(g,stake);assertIntegrity(g);return g;
 }
 export function legalActions(g) {
   if(g.over)return {cards:[],actions:[]};
@@ -69,7 +85,7 @@ export function applyAction(state, action, random=secureRandom) {
     case 'resign': g.over=true;g.phase='over';g.resigned=true;g.draw=false;g.winner=null;g.loser=0;g.message='Ты завершил серверную партию. Можно открыть новый стол.';changed=true;break;
   }
   if(!changed)fail('illegal_action');
-  runBots(g,core);assertIntegrity(g);return g;
+  runBots(g,core);g.economy=economyFor(g,state.economy?.stake||0);assertIntegrity(g);return g;
 }
 export function projectGame(g) {
   if(!g)return null;
@@ -80,7 +96,7 @@ export function projectGame(g) {
     players:g.players.map((p,i)=>({name:p.name,face:p.face,handCount:p.hand.length,kind:p.kind,...(i===0?{hand:p.hand.map(publicCard)}:{botStyle:p.botStyle})})),
     table:g.table.map(p=>({a:publicCard(p.a),d:publicCard(p.d)})),
     over:g.over,draw:g.draw,winner:g.winner,loser:g.loser,finished:[...g.finished],
-    resigned:g.resigned===true,difficulty:g.diff,message:g.message,
+    resigned:g.resigned===true,difficulty:g.diff,message:g.message,economy:{...(g.economy||economyFor(g))},
     journal:g.journal.map(entry=>({round:entry.round,kind:entry.kind,...(Number.isInteger(entry.actor)?{actor:entry.actor}:{}),...(Number.isInteger(entry.count)?{count:entry.count}:{}),...(entry.card?{card:{rank:entry.card.rank,suit:entry.card.suit}}:{}),...(entry.against?{against:{rank:entry.against.rank,suit:entry.against.suit}}:{})})),
     legal:legalActions(g),
   };

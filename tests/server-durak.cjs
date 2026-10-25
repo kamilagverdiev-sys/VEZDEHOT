@@ -25,6 +25,7 @@ function memoryService(options={}) {
     if(route.endsWith('server_durak_read'))return Response.json(old?{receipt:old.response}:{revision:store.revision,state:store.state});
     if(route.endsWith('server_durak_commit')){
       if(old)return Response.json({receipt:old.response});
+      if(options.insufficientFunds)return Response.json({code:'P0001',message:'insufficient_funds'},{status:400});
       if(options.conflictOnCommit){store.revision++;return Response.json({conflict:true,revision:store.revision,state:store.state});}
       if(body.p_expected_revision!==store.revision)return Response.json({conflict:true,revision:store.revision,state:store.state});
       store.state=clone(body.p_state);store.revision++;store.receipts.set(body.p_action_id,{request:clone(body.p_request),response:clone(body.p_response)});
@@ -47,7 +48,7 @@ test('server projection never exposes other hands or shuffled deck, including co
  const {createGame,projectGame}=await engine,g=createGame({bots:3,id:gameId},seeded()),p=projectGame(g);
  assert.equal(p.players[0].hand.length,g.players[0].hand.length);assert(!Object.hasOwn(p,'deck'));
  p.players.slice(1).forEach((opponent,i)=>{assert(!Object.hasOwn(opponent,'hand'));assert.equal(opponent.handCount,g.players[i+1].hand.length)});
- g.over=true;g.phase='over';assert(!Object.hasOwn(projectGame(g).players[1],'hand'));
+ const ended=(await engine).applyAction(g,{type:'resign'});assert(!Object.hasOwn(projectGame(ended).players[1],'hand'));
  const keys=Object.keys(p);assert(!keys.includes('pendingRound'));assert(!keys.includes('state'));
 });
 test('illegal actor, card, phase, fields and action do not mutate source',async()=>{
@@ -104,4 +105,43 @@ test('CAS race returns only public projection and no guessed candidate state',as
 test('oversized request and malformed action are denied',async()=>{
  const s=await setup();assert.equal((await s.handle(req({op:'load',padding:'x'.repeat(5000)}))).status,413);
  await s.handle(req(start(0)));assert.equal((await s.handle(req(action(1,'take','6♠')))).status,400);assert.equal(s.store.revision,1);
+});
+
+test('paid Durak settles every terminal outcome from the real round transition',async()=>{
+ const e=await engine,c=(rank)=>({rank,suit:'♠',color:'black',id:rank+'♠'});
+ for(const bots of [1,2,3])for(const outcome of ['win','draw','loss']){
+  let g=e.createGame({bots,id:gameId,stake:100},seeded());
+  // All but this final defended pair have reached the discard pile.
+  Object.assign(g,{deck:[],table:[{a:c('7'),d:c('8')}],discardCount:outcome==='draw'?34:33,phase:'resolve',attacker:0,defender:1,finished:[],roundLimit:6,resolve:{took:false},pendingRound:null});
+  g.players.forEach(p=>p.hand=[]);if(outcome!=='draw')g.players[outcome==='loss'?0:1].hand=[c('6')];
+  e.assertIntegrity(g);assert.equal(g.economy.settled,false);
+  g=e.applyAction(g,{type:'finish'},seeded());assert.equal(g.economy.settled,false);
+  g=e.applyAction(g,{type:'continue'},seeded());assert(g.over);e.assertIntegrity(g);
+  assert.deepEqual(g.economy,{version:1,stake:100,settled:true,payout:outcome==='win'?100*(bots+1):outcome==='draw'?100:0,xp:{win:80,draw:40,loss:25}[outcome],outcome});
+  assert.deepEqual(e.projectGame(g).economy,g.economy);
+  assert.throws(()=>e.applyAction(g,{type:'continue'}),{code:'illegal_action'});
+ }
+});
+test('Durak paid resignation has no reward, rejects economy corruption and preserves legacy free tables',async()=>{
+ const e=await engine,g=e.createGame({id:gameId,stake:100},seeded()),before=clone(g);
+ const resigned=e.applyAction(g,{type:'resign'});assert.deepEqual(g,before);
+ assert.deepEqual(resigned.economy,{version:1,stake:100,settled:true,payout:0,xp:0,outcome:'resigned'});
+ for(const mutate of [x=>x.stake=500,x=>x.payout=100,x=>x.xp=80,x=>x.settled=true,x=>x.outcome='win',x=>x.extra=1]){const bad=clone(g);mutate(bad.economy);assert.throws(()=>e.projectGame(bad),{code:'invalid_server_state'});}
+ const legacy=clone(g);delete legacy.economy;assert.equal(e.projectGame(legacy).economy.stake,0);
+ assert.deepEqual(e.applyAction(legacy,{type:'resign'}).economy,{version:1,stake:0,settled:true,payout:0,xp:0,outcome:'resigned'});
+ for(const stake of [null,-1,1,100.5,500,'100'])assert.throws(()=>e.createGame({stake}),{code:'invalid_request'});
+});
+test('Durak endpoint allows only fixed optional stakes and keeps paid start retry exact',async()=>{
+ const s=await setup();for(const stake of [null,-1,1,100.5,500,'100'])assert.equal((await s.handle(req({...start(0),stake}))).status,400);
+ assert.equal(s.calls.length,0);
+ const body={...start(0),stake:100},first=await(await s.handle(req(body))).json();assert.equal(first.game.economy.stake,100);assert.equal(first.game.economy.settled,false);
+ assert.deepEqual(await(await s.handle(req(body))).json(),first);assert.equal(s.store.revision,1);
+ assert.equal((await s.handle(req({...body,stake:0}))).status,409);
+ const end=await(await s.handle(req(action(1,'resign')))).json();assert.equal(end.game.economy.payout,0);assert.equal(end.game.economy.xp,0);
+});
+test('Durak insufficient funds leaves the table and request receipt uncommitted',async()=>{
+ const s=await setup({insufficientFunds:true}),body={...start(0),stake:100};
+ const response=await s.handle(req(body));assert.equal(response.status,422);assert.deepEqual(await response.json(),{error:'insufficient_funds'});
+ assert.equal(s.store.state,null);assert.equal(s.store.revision,0);assert.equal(s.store.receipts.size,0);
+ s.options.insufficientFunds=false;assert.equal((await s.handle(req(body))).status,200);assert.equal(s.store.revision,1);
 });

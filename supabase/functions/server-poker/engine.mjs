@@ -19,6 +19,17 @@ const rules = (random = secureRandom) => createCore({random});
 const publicCard = card => ({id:card.id,rank:card.rank,suit:card.suit,v:card.v,red:card.red});
 const publicCombination = value => ({name:value.name,category:value.category,cards:[...value.cards],parts:[...value.parts]});
 const tableEnded = (g, core) => g.tableClosed === true || (g.over === true && core.tableFinished(g));
+const economyKeys=['version','stake','settled','payout','xp','outcome'];
+function economyFor(state,stake=0) {
+  const cashout=Math.floor(state.game.players[0].chips/10);
+  const outcome=!state.over?null:!state.game.over?'resigned':cashout>100?'win':cashout===100?'draw':'loss';
+  return {version:1,stake,settled:state.over,payout:stake&&state.over?cashout:0,xp:stake&&state.over?({win:90,draw:40,loss:20}[outcome]||0):0,outcome};
+}
+function checkEconomy(state) {
+  if(state.economy===undefined)return; // Older tables are free practice.
+  const e=state.economy;
+  if(!object(e)||![0,100].includes(e.stake)||Object.keys(e).length!==economyKeys.length||economyKeys.some(k=>e[k]!==economyFor(state,e.stake)[k])||(e.stake===100&&state.over&&!state.game.over))invalidState();
+}
 
 /** Checks persisted internal state before it can influence any reply or transition. */
 export function assertIntegrity(state) {
@@ -46,6 +57,7 @@ export function assertIntegrity(state) {
     if (g.pots.reduce((sum,pot) => sum+pot.amount,0) !== g.paidPot) invalidState();
   }
   if (state.over !== tableEnded(g,rules())) invalidState();
+  checkEconomy(state);
   return true;
 }
 
@@ -58,13 +70,14 @@ function runBots(g, core) {
   }
 }
 
-export function createGame({difficulty='normal',nick='Ты',id=newId()}={},random=secureRandom,uuid=newId) {
-  if (!DIFFICULTIES.includes(difficulty) || typeof nick !== 'string' || !UUID.test(id)) throw new GameError('invalid_request',400);
+export function createGame({difficulty='normal',nick='Ты',id=newId(),stake=0}={},random=secureRandom,uuid=newId) {
+  if (!DIFFICULTIES.includes(difficulty) || typeof nick !== 'string' || !UUID.test(id)||![0,100].includes(stake)) throw new GameError('invalid_request',400);
   const name = nick.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,24) || 'Ты';
   const core = rules(random), g = core.pokerNewGame(name,difficulty);
   g.id=uuid();g.tableId=id;
   runBots(g,core);
   const state={version:1,id,handId:g.id,over:tableEnded(g,core),game:g};
+  state.economy=economyFor(state,stake);
   assertIntegrity(state);return state;
 }
 
@@ -78,7 +91,7 @@ export function legalActions(state) {
     betting=core.legalActions(g,0);
     for (const type of ['fold','check','call','raise']) if(betting[type]) actions.push(type);
   }
-  actions.push('close');
+  if(state.economy?.stake!==100||g.over)actions.push('close');
   return {actions,callAmount:betting.callAmount||0,owed:betting.owed||0,minimum:betting.minimum||0,maximum:betting.maximum||0};
 }
 
@@ -100,6 +113,7 @@ export function applyAction(state,action,random=secureRandom,uuid=newId) {
     g.tableClosed=true;
   }
   runBots(g,core);next.over=tableEnded(g,core);
+  next.economy=economyFor(next,state.economy?.stake||0);
   assertIntegrity(next);return next;
 }
 
@@ -125,8 +139,9 @@ export function projectGame(state) {
     }),
     prizes:g.over?[...g.prizes]:[],
     pots:g.over?g.pots.map(p => ({amount:p.amount,winners:[...p.winners],refund:p.refund})):[],
-    result:closed?'Стол закрыт. Фишки этого тренировочного стола не переносятся в кошелёк.':g.over?g.result:'',
-    lastAction:closed?'Ты закрыл тренировочный стол. Можно создать новый.':g.lastAction,
+    result:closed?(state.economy?.stake===100?'Стол закрыт. Итог рассчитан по оставшимся фишкам.':'Стол закрыт. Фишки этого тренировочного стола не переносятся в кошелёк.'):g.over?g.result:'',
+    lastAction:closed?(state.economy?.stake===100?'Стол закрыт. Начисление и закрытие сохранены вместе.':'Ты закрыл тренировочный стол. Можно создать новый.'):g.lastAction,
+    economy:{...(state.economy||economyFor(state))},
     history:[...g.history],
     tableHistory:g.tableHistory.map(item => ({number:item.number,net:item.net,pot:item.pot,winners:[...item.winners]})),
     legal:legalActions(state),

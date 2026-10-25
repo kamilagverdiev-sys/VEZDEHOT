@@ -8,7 +8,7 @@ function memory(){const values=new Map();return {values,getItem:k=>values.get(k)
 const card=(rank,suit='♠')=>({id:rank+suit,rank,suit,color:suit==='♥'||suit==='♦'?'red':'black'});
 function game(){return {id:ID,phase:'attack',round:1,players:[{name:'Ты',hand:[card('6')],handCount:1},{name:'Бот',handCount:1}],table:[],legal:{cards:['6♠'],actions:['attack','resign']},over:false,deckCount:34,discardCount:0,attacker:0,defender:1,finished:[],journal:[]}}
 const response=(revision,g=game(),status='ok')=>({ok:true,status:200,data:{status,revision,game:g}});
-function harness(request,store=memory()){let active=true;const events=[];const controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s))});return {controller,store,events,deactivate:()=>active=false}}
+function harness(request,store=memory(),hooks={}){let active=true;const events=[];const controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s)),...hooks});return {controller,store,events,deactivate:()=>active=false}}
 const flush=()=>new Promise(r=>setImmediate(r));
 
 test('lost acknowledgement persists the exact request, blocks fresh actions and replays before loading the latest table',async()=>{
@@ -40,7 +40,7 @@ test('server revisions may not move backwards after a refresh',async()=>{
  let revision=8;const h=harness(async()=>response(revision));await h.controller.load();revision=5;await h.controller.load();assert.equal(h.controller.status().revision,8);assert.equal(h.controller.status().ready,false);assert.match(h.controller.status().notice,/устаревшая/);
 });
 test('unremovable pending receipt is retried with the same ID without creating another move',async()=>{
- const store=memory(),normalRemove=store.removeItem;let fail=true;store.removeItem=k=>{if(fail)throw Error('Storage denied');normalRemove(k)};const calls=[],h=harness(async b=>{calls.push(copy(b));return response(b.op==='load'?3:2,game(),b.op==='load'?'ok':'saved')},store);await h.controller.load();await h.controller.act({type:'attack',cardId:'6♠'});assert.equal(h.controller.status().pending,true);fail=false;await h.controller.load();const actions=calls.filter(c=>c.op==='action');assert.equal(actions.length,2);assert.deepEqual(actions[0],actions[1]);assert.equal(h.controller.status().pending,false);
+ const store=memory(),normalRemove=store.removeItem;let fail=true,loads=0;store.removeItem=k=>{if(fail)throw Error('Storage denied');normalRemove(k)};const calls=[],h=harness(async b=>{calls.push(copy(b));return response(b.op==='load'&&++loads===1?3:4,game(),b.op==='load'?'ok':'saved')},store);await h.controller.load();await h.controller.act({type:'attack',cardId:'6♠'});assert.equal(h.controller.status().pending,true);fail=false;await h.controller.load();const actions=calls.filter(c=>c.op==='action');assert.equal(actions.length,2);assert.deepEqual(actions[0],actions[1]);assert.equal(h.controller.status().pending,false);
 });
 test('damaged persistent action is never sent, including repeated retries',async()=>{
  const store=memory(),calls=[];store.setItem(pendingKey,JSON.stringify({op:'action',actionId:'wrong'}));const h=harness(async b=>{calls.push(b);return response(1)},store);await h.controller.load();await h.controller.load();assert.equal(calls.length,0);assert.equal(h.controller.status().ready,false);
@@ -74,4 +74,70 @@ test('card intent cannot play while loading, awaiting a receipt or after a table
 });
 test('a malformed revealed trump cannot replace the current server table',async()=>{
  const g=game();g.trump='♠';g.trumpCard=card('A','♥');const h=harness(async()=>response(1,g));await h.controller.load();assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().game,null);
+});
+for(const [label,bad] of [
+ ['missing game',()=>response(5,null,'saved')],
+ ['old revision',()=>response(4,game(),'saved')],
+ ['unrelated newer revision',()=>response(8,game(),'saved')],
+ ['different table',()=>response(5,{...game(),id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd'},'saved')]
+])test('saved ACK with '+label+' keeps the durable action through retry and connection loss',async()=>{
+ let mode='bad';const calls=[],latest={...game(),id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'};
+ const h=harness(async b=>{calls.push(copy(b));if(b.op==='load')return response(mode==='good'?9:4,mode==='good'?latest:game());if(mode==='offline')throw Error('Disconnected');return mode==='good'?response(5,game(),'saved'):bad()});
+ await h.controller.load();await h.controller.act({type:'attack',cardId:'6♠'});
+ const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().revision,4);assert.deepEqual(calls.map(b=>b.op),['load','action']);
+ mode='offline';await h.controller.load();assert.equal(h.store.getItem(pendingKey),staged);assert.equal(h.controller.status().pending,true);
+ mode='good';await h.controller.load();assert.equal(h.store.getItem(pendingKey),null);assert.equal(h.controller.status().revision,9);assert.equal(h.controller.status().game.id,latest.id);assert.equal(h.controller.status().ready,true);
+ assert.deepEqual(calls.filter(b=>b.op==='action'),Array.from({length:3},()=>JSON.parse(staged)));
+});
+test('a start ACK requires a game and accepts its newly allocated ID on the same durable retry',async()=>{
+ let valid=false;const calls=[],created={...game(),id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd'};
+ const h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(valid?1:0,valid?created:null):response(1,valid?created:null,'saved')});
+ await h.controller.load();await h.controller.start(3,'hard');const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().game,null);
+ valid=true;await h.controller.load();assert.equal(h.controller.status().game.id,created.id);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().pending,false);assert.deepEqual(calls.filter(b=>b.op==='start'),[JSON.parse(staged),JSON.parse(staged)]);
+});
+test('a stale read after an accepted ACK cannot reopen pre-action cards or replay the accepted move',async()=>{
+ let revision=4;const calls=[],h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(revision):response(5,game(),'saved')});
+ await h.controller.load();await h.controller.act({type:'attack',cardId:'6♠'});assert.equal(h.controller.status().revision,5);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().pending,false);assert.match(h.controller.status().notice,/устаревшая/);
+ revision=7;await h.controller.load();assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().revision,7);assert.equal(calls.filter(b=>b.op==='action').length,1);
+});
+
+const economy=(stake=100,settled=false,outcome=null)=>({version:1,stake,settled,payout:0,xp:0,outcome});
+test('paid start retains the identical entry and action ID after a lost acknowledgement and page reload',async()=>{
+ const store=memory(),calls=[],created={...game(),economy:economy()};let applied=false;
+ const first=harness(async b=>{calls.push(copy(b));if(b.op==='load')return response(0,null);applied=true;throw Error('Lost ACK')},store);
+ await first.controller.load();await first.controller.start(3,'hard',100);assert(applied);const staged=JSON.parse(store.getItem(pendingKey));assert.deepEqual(staged,{op:'start',bots:3,difficulty:'hard',stake:100,actionId:ID,expectedRevision:0});
+ await first.controller.start(3,'hard',100);assert.equal(calls.filter(b=>b.op==='start').length,1);first.controller.destroy();
+ const retry=[];const second=harness(async b=>{retry.push(copy(b));return response(1,created,b.op==='load'?'ok':'saved')},store);await second.controller.load();assert.deepEqual(retry,[staged,{op:'load'}]);assert.equal(second.controller.status().game.economy.stake,100);assert.equal(second.controller.status().pending,false);
+});
+test('only the supported optional entry survives durable-flight validation',()=>{
+ const {validFlight}=ctx.window.VEZDEHOT_SERVER_DURAK,legacy={op:'start',bots:1,difficulty:'normal',actionId:ID,expectedRevision:0};
+ assert(validFlight(legacy));for(const stake of [0,100])assert(validFlight({...legacy,stake}));for(const stake of [-100,1,200,'100',null,undefined])assert.equal(validFlight({...legacy,stake}),false);assert.equal(validFlight({...legacy,reward:1000}),false);
+});
+test('invalid paid entry never stages or sends a start, while explicit free entry keeps the legacy request',async()=>{
+ const calls=[],h=harness(async b=>{calls.push(copy(b));return response(b.op==='load'?0:1,b.op==='load'?null:game(),b.op==='load'?'ok':'saved')});await h.controller.load();
+ for(const stake of [-1,200,'100',null])assert.equal(await h.controller.start(1,'normal',stake),false);assert.deepEqual(calls,[{op:'load'}]);assert.equal(h.store.getItem(pendingKey),null);
+ await h.controller.start(1,'normal',0);assert(!Object.hasOwn(calls[1],'stake'));
+});
+test('optional economy projection accepts legacy and complete server fields and rejects malformed calculations',()=>{
+ const {projection}=ctx.window.VEZDEHOT_SERVER_DURAK;assert.doesNotThrow(()=>projection(response(1).data));assert.doesNotThrow(()=>projection(response(1,{...game(),economy:economy()}).data));
+ const done={...game(),over:true,phase:'over',legal:{cards:[],actions:[]}};assert.doesNotThrow(()=>projection(response(2,{...done,economy:economy(0,true,'loss')}).data));
+ for(const change of [{version:2},{stake:50},{payout:-1},{xp:81},{payout:100},{outcome:'win'},{settled:true},{extra:'ignored'}])assert.throws(()=>projection(response(1,{...game(),economy:{...economy(),...change}}).data));
+ const missing=economy();delete missing.xp;assert.throws(()=>projection(response(1,{...game(),economy:missing}).data));assert.throws(()=>projection(response(2,{...done,economy:{...economy(0,true,'win'),xp:80}}).data));
+});
+test('insufficient funds clears the rejected entry, reports no charge and refreshes the same-revision wallet',async()=>{
+ const calls=[];let confirmed=0;const h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(6,null):{ok:false,status:422,data:{error:'insufficient_funds'}}},memory(),{onConfirmed:()=>confirmed++});
+ await h.controller.load();assert.equal(confirmed,1);await h.controller.start(2,'hard',100);assert.equal(confirmed,2);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,true);assert.equal(h.store.getItem(pendingKey),null);assert.match(h.controller.status().notice,/Недостаточно серверных монет/);assert.match(h.controller.status().notice,/не списаны/);assert.deepEqual(calls.map(b=>b.op),['load','start','load']);
+});
+test('wallet refresh follows confirmed revision changes once, including ACK followed by a stale load',async()=>{
+ let revision=4,confirmed=0;const h=harness(async b=>response(b.op==='load'?revision:5,game(),b.op==='load'?'ok':'saved'),memory(),{onConfirmed:()=>{confirmed++;return Promise.reject(Error('Wallet offline'))}});
+ await h.controller.load();await h.controller.load();assert.equal(confirmed,1);await h.controller.act({type:'attack',cardId:'6♠'});assert.equal(confirmed,2);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,false);revision=5;await h.controller.load();assert.equal(confirmed,2);assert.equal(h.controller.status().ready,true);revision=6;await h.controller.load();assert.equal(confirmed,3);
+});
+test('invalid acknowledgement never announces a confirmed wallet change',async()=>{
+ let confirmed=0;const h=harness(async b=>response(b.op==='load'?1:9,game(),b.op==='load'?'ok':'saved'),memory(),{onConfirmed:()=>confirmed++});await h.controller.load();await h.controller.act({type:'resign'});assert.equal(confirmed,1);assert.equal(h.controller.status().pending,true);
+});
+for(const [label,badEconomy] of [['missing economy',undefined],['free economy',economy(0)]])test('paid start ACK with '+label+' keeps the entry pending until the same request confirms its stake',async()=>{
+ let valid=false,confirmed=0;const calls=[],paid={...game(),economy:economy()},bad={...game(),...(badEconomy?{economy:badEconomy}:{})};
+ const h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(valid?1:0,valid?paid:null):response(1,valid?paid:bad,'saved')},memory(),{onConfirmed:()=>confirmed++});
+ await h.controller.load();await h.controller.start(2,'hard',100);const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().game,null);assert.equal(h.controller.status().revision,0);assert.equal(confirmed,1);assert.match(h.controller.status().notice,/не подтвердил вход 100 V/);
+ valid=true;await h.controller.load();assert.deepEqual(calls.filter(b=>b.op==='start'),[JSON.parse(staged),JSON.parse(staged)]);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().game.economy.stake,100);assert.equal(confirmed,2);
 });

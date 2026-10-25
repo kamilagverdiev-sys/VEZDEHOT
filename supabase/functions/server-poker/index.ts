@@ -12,12 +12,12 @@ async function requestBody(request: Request) {
   const raw=new Uint8Array(bytes);let at=0;for(const chunk of chunks){raw.set(chunk,at);at+=chunk.byteLength;}
   let body;try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{invalid();}
   if(!object(body))invalid();
-  const allowed=body.op==='load'?['op']:body.op==='start'?['op','actionId','expectedRevision','difficulty']:body.op==='action'?['op','actionId','expectedRevision','gameId','action']:[];
+  const allowed=body.op==='load'?['op']:body.op==='start'?['op','actionId','expectedRevision','difficulty','stake']:body.op==='action'?['op','actionId','expectedRevision','gameId','action']:[];
   if(!allowed.length||Object.keys(body).some(k=>!allowed.includes(k)))invalid();
   if(body.op==='load')return body;
   if(typeof body.actionId!=='string'||!UUID.test(body.actionId)||!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)invalid();
   if(body.op==='start') {
-    if(!['easy','normal','hard'].includes(body.difficulty))invalid();
+    if(!['easy','normal','hard'].includes(body.difficulty)||(body.stake!==undefined&&![0,100].includes(body.stake)))invalid();
   } else if(typeof body.gameId!=='string'||!UUID.test(body.gameId)||!object(body.action))invalid();
   return body;
 }
@@ -36,6 +36,7 @@ export function createHandler(deps: Dependencies={}) {
   }
   async function rpc(name:string,body:unknown) {
     const result=await api('/rest/v1/rpc/'+name,body);
+    if(!result.ok&&result.value?.code==='P0001'&&result.value?.message==='insufficient_funds')throw new GameError('insufficient_funds',422);
     if(!result.ok)throw new GameError(result.value?.code==='22023'?'request_id_reused':'server_unavailable',result.value?.code==='22023'?409:503);
     if(!object(result.value))throw new GameError('server_unavailable',503);
     return result.value;
@@ -64,7 +65,7 @@ export function createHandler(deps: Dependencies={}) {
       if(body.op==='start') {
         if(current.state&&!current.state.over)throw new GameError('table_already_active',422);
         const nickname=String(user.user_metadata?.full_name||user.user_metadata?.name||'Ты').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,24)||'Ты';
-        state=createGame({difficulty:body.difficulty,nick:nickname,id:deps.uuid?.()??crypto.randomUUID()},deps.random,deps.uuid);
+        state=createGame({difficulty:body.difficulty,nick:nickname,id:deps.uuid?.()??crypto.randomUUID(),stake:body.stake??0},deps.random,deps.uuid);
       } else {
         if(!current.state||current.state.id!==body.gameId)throw new GameError('table_changed',422);
         state=applyAction(current.state,body.action,deps.random,deps.uuid);

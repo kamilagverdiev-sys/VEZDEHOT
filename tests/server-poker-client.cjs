@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync('dist/server-poker.js','utf8'),ctx={window:{},document:{getElementById:()=>null},Object,JSON,Number,Set,Error,Promise};
-vm.createContext(ctx);vm.runInContext(source,ctx);const {createController,projection,validFlight,equityInput}=ctx.window.VEZDEHOT_SERVER_POKER;
+vm.createContext(ctx);vm.runInContext(source,ctx);const {createController,projection,validFlight,equityInput,economyOf,paidStartAvailability}=ctx.window.VEZDEHOT_SERVER_POKER;
 const ID='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',SCOPE='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const copy=v=>JSON.parse(JSON.stringify(v)),pendingKey='vezdehot:server-poker:pending:v1:'+SCOPE;
 function memory(){const values=new Map();return {values,getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}}
@@ -40,7 +40,7 @@ test('server revisions may not move backwards after a refresh',async()=>{
  let revision=8;const h=harness(async()=>response(revision));await h.controller.load();revision=5;await h.controller.load();assert.equal(h.controller.status().revision,8);assert.equal(h.controller.status().ready,false);assert.match(h.controller.status().notice,/устаревшая/);
 });
 test('unremovable pending receipt is retried with the same ID without creating another move',async()=>{
- const store=memory(),normalRemove=store.removeItem;let fail=true;store.removeItem=k=>{if(fail)throw Error('Storage denied');normalRemove(k)};const calls=[],h=harness(async b=>{calls.push(copy(b));return response(b.op==='load'?3:2,game(),b.op==='load'?'ok':'saved')},store);await h.controller.load();await h.controller.act({type:'call'});assert.equal(h.controller.status().pending,true);fail=false;await h.controller.load();const actions=calls.filter(c=>c.op==='action');assert.equal(actions.length,2);assert.deepEqual(actions[0],actions[1]);assert.equal(h.controller.status().pending,false);
+ const store=memory(),normalRemove=store.removeItem;let fail=true,loads=0;store.removeItem=k=>{if(fail)throw Error('Storage denied');normalRemove(k)};const calls=[],h=harness(async b=>{calls.push(copy(b));return response(b.op==='load'&&++loads===1?3:4,game(),b.op==='load'?'ok':'saved')},store);await h.controller.load();await h.controller.act({type:'call'});assert.equal(h.controller.status().pending,true);fail=false;await h.controller.load();const actions=calls.filter(c=>c.op==='action');assert.equal(actions.length,2);assert.deepEqual(actions[0],actions[1]);assert.equal(h.controller.status().pending,false);
 });
 test('damaged persistent action is never sent, including repeated retries',async()=>{
  const store=memory(),calls=[];store.setItem(pendingKey,JSON.stringify({op:'action',actionId:'wrong'}));const h=harness(async b=>{calls.push(b);return response(1)},store);await h.controller.load();await h.controller.load();assert.equal(calls.length,0);assert.equal(h.controller.status().ready,false);
@@ -86,4 +86,74 @@ test('an invalid local action is never persisted or sent',async()=>{
 });
 test('an unrecognized mutation acknowledgement keeps the exact pending request for retry',async()=>{
  const h=harness(async b=>response(b.op==='load'?1:2,game(),'ok'));await h.controller.load();await h.controller.act({type:'call'});assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert(h.store.getItem(pendingKey));
+});
+for(const [label,bad] of [
+ ['missing game',()=>response(5,null,'saved')],
+ ['old revision',()=>response(4,game(),'saved')],
+ ['unrelated newer revision',()=>response(8,game(),'saved')],
+ ['different table',()=>response(5,{...game(),id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd'},'saved')]
+])test('saved ACK with '+label+' keeps the durable action through retry and connection loss',async()=>{
+ let mode='bad';const calls=[],latest={...game(),id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'};
+ const h=harness(async b=>{calls.push(copy(b));if(b.op==='load')return response(mode==='good'?9:4,mode==='good'?latest:game());if(mode==='offline')throw Error('Disconnected');return mode==='good'?response(5,game(),'saved'):bad()});
+ await h.controller.load();await h.controller.act({type:'call'});
+ const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().revision,4);assert.deepEqual(calls.map(b=>b.op),['load','action']);
+ mode='offline';await h.controller.load();assert.equal(h.store.getItem(pendingKey),staged);assert.equal(h.controller.status().pending,true);
+ mode='good';await h.controller.load();assert.equal(h.store.getItem(pendingKey),null);assert.equal(h.controller.status().revision,9);assert.equal(h.controller.status().game.id,latest.id);assert.equal(h.controller.status().ready,true);
+ assert.deepEqual(calls.filter(b=>b.op==='action'),Array.from({length:3},()=>JSON.parse(staged)));
+});
+test('a start ACK requires a game and accepts its newly allocated ID on the same durable retry',async()=>{
+ let valid=false;const calls=[],created={...game(),id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd'};
+ const h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(valid?1:0,valid?created:null):response(1,valid?created:null,'saved')});
+ await h.controller.load();await h.controller.start('hard');const staged=h.store.getItem(pendingKey);assert(staged);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().game,null);
+ valid=true;await h.controller.load();assert.equal(h.controller.status().game.id,created.id);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().pending,false);assert.deepEqual(calls.filter(b=>b.op==='start'),[JSON.parse(staged),JSON.parse(staged)]);
+});
+test('a stale read after an accepted ACK cannot reopen pre-action cards or replay the accepted move',async()=>{
+ let revision=4;const calls=[],h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(revision):response(5,game(),'saved')});
+ await h.controller.load();await h.controller.act({type:'call'});assert.equal(h.controller.status().revision,5);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().pending,false);assert.match(h.controller.status().notice,/устаревшая/);
+ revision=7;await h.controller.load();assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().revision,7);assert.equal(calls.filter(b=>b.op==='action').length,1);
+});
+
+function paidGame(){const g=game();g.legal.actions=g.legal.actions.filter(a=>a!=='close');g.economy={version:1,stake:100,settled:false,payout:0,xp:0,outcome:null};return g;}
+function settledGame(chipCount){const g=paidGame();g.over=true;g.handOver=true;g.phase='over';g.toAct=-1;g.tableClosed=true;g.players[0].chips=chipCount;g.legal={actions:[],callAmount:0,owed:0,minimum:0,maximum:0};const payout=Math.floor(chipCount/10);g.economy={version:1,stake:100,settled:true,payout,xp:payout>100?90:payout===100?40:20,outcome:payout>100?'win':payout===100?'draw':'loss'};return g;}
+test('start flights accept only optional 0 or 100 V and cannot carry a client wallet result',()=>{
+ const base={op:'start',actionId:ID,expectedRevision:0,difficulty:'normal'};
+ for(const body of [base,{...base,stake:0},{...base,stake:100}])assert.equal(validFlight(body),true);
+ for(const stake of [-100,1,99,101,100.5,'100',null])assert.equal(validFlight({...base,stake}),false);
+ for(const field of ['payout','xp','balance','wallet'])assert.equal(validFlight({...base,stake:100,[field]:1000}),false);
+});
+test('a paid start survives a lost ACK as the exact same entry request and installs only the latest load',async()=>{
+ const store=memory(),firstCalls=[],first=harness(async b=>{firstCalls.push(copy(b));if(b.op==='load')return response(0,null);throw Error('Lost response')},store);
+ await first.controller.load();await first.controller.start('hard',100);const staged=store.getItem(pendingKey);assert(staged);assert.deepEqual(JSON.parse(staged),{op:'start',difficulty:'hard',stake:100,actionId:ID,expectedRevision:0});assert.equal(first.controller.status().game,null);
+ first.controller.destroy();const calls=[],latest=paidGame();latest.handNumber=2;const restored=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(8,latest):response(1,paidGame(),'saved')},store);await restored.controller.load();
+ assert.deepEqual(calls,[JSON.parse(staged),{op:'load'}]);assert.equal(restored.controller.status().revision,8);assert.equal(restored.controller.status().game.handNumber,2);assert.equal(store.getItem(pendingKey),null);
+});
+test('paid start cannot clear its pending request with a free or missing-economy ACK',async()=>{
+ for(const make of [game,()=>({...game(),economy:{version:1,stake:0,settled:false,payout:0,xp:0,outcome:null}})]){
+  const h=harness(async b=>b.op==='load'?response(0,null):response(1,make(),'saved'));await h.controller.load();await h.controller.start('normal',100);
+  assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().game,null);assert.equal(JSON.parse(h.store.getItem(pendingKey)).stake,100);
+ }
+});
+test('insufficient funds leaves no optimistic table and offers a recoverable free option',async()=>{
+ const calls=[],h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(0,null):{ok:false,status:422,data:{error:'insufficient_funds'}}});await h.controller.load();await h.controller.start('normal',100);
+ assert.equal(h.controller.status().game,null);assert.equal(h.controller.status().revision,0);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,true);assert.equal(h.store.getItem(pendingKey),null);assert.match(h.controller.status().notice,/бесплатную практику/);assert.match(h.controller.status().notice,/списания нет/);assert.deepEqual(calls.map(b=>b.op),['load','start','load']);
+});
+test('next hand on a paid table retains its table ID and never sends another stake',async()=>{
+ const ended=paidGame();ended.handOver=true;ended.phase='over';ended.toAct=-1;ended.legal={actions:['nextHand','close'],callAmount:0,owed:0,minimum:0,maximum:0};const next=paidGame();next.handNumber=2;let loads=0;const calls=[],h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(++loads===1?5:6,loads===1?ended:next):response(6,next,'saved')});
+ await h.controller.load();await h.controller.act({type:'nextHand'});assert.deepEqual(calls[1],{op:'action',gameId:ID,action:{type:'nextHand'},actionId:ID,expectedRevision:5});assert.equal(h.controller.status().game.economy.stake,100);assert.equal(h.controller.status().game.id,ID);assert.equal(h.controller.status().game.handNumber,2);
+});
+test('legacy practice, active economy and each exact current-chip settlement validate',()=>{
+ assert.equal(economyOf(game()),null);
+ const free=game();free.economy={version:1,stake:0,settled:false,payout:0,xp:0,outcome:null};assert.doesNotThrow(()=>projection(response(0,free).data));free.over=true;free.tableClosed=true;free.phase='over';free.legal.actions=[];free.economy.settled=true;free.economy.outcome='resigned';assert.doesNotThrow(()=>projection(response(1,free).data));
+ assert.doesNotThrow(()=>projection(response(1,paidGame()).data));
+ for(const n of [0,999,1000,1009,1010,4000]){const g=settledGame(n);assert.equal(projection(response(4,g).data).game.economy.payout,Math.floor(n/10));}
+});
+test('paid projection rejects premature payout, mid-hand cashout and inconsistent settlement rewards',()=>{
+ for(const mutate of [g=>g.economy.stake=1,g=>g.economy.payout=10,g=>g.economy.xp=20,g=>g.economy.outcome='win',g=>g.economy.settled=true,g=>g.legal.actions.push('close'),g=>g.legal.actions.push('resign')]){const g=paidGame();mutate(g);assert.throws(()=>projection(response(1,g).data));}
+ for(const mutate of [g=>g.economy.payout++,g=>g.economy.xp=40,g=>g.economy.outcome='draw',g=>g.handOver=false,g=>g.economy.settled=false,g=>g.players[0].chips=1100]){const g=settledGame(2000);mutate(g);assert.throws(()=>projection(response(8,g).data));}
+ const free=settledGame(2000);free.economy.stake=0;assert.throws(()=>projection(response(8,free).data));
+});
+test('paid setup requires a current, idle server wallet and sufficient balance',()=>{
+ const wallet={phase:'saved',ready:true,busy:false,pending:false,wallet:{balance:100}};assert.equal(paidStartAvailability(wallet).allowed,true);assert.equal(paidStartAvailability({...wallet,wallet:{balance:99}}).allowed,false);
+ for(const change of [{phase:'offline'},{ready:false},{busy:true},{pending:true},{wallet:null},{wallet:{balance:'100'}},{wallet:{balance:-1}}])assert.equal(paidStartAvailability({...wallet,...change}).allowed,false);
+ assert.equal(paidStartAvailability(null).allowed,false);assert.match(paidStartAvailability({...wallet,wallet:{balance:0}}).reason,/бесплатно/);
 });
