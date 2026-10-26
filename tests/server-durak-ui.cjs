@@ -108,3 +108,14 @@ test('a full finish-only table explains Bito once and does not repeat a stale in
  assert.equal(h.query('.sd-turn h1').textContent,'Все карты отбиты');assert.equal(h.query('.sd-turn p').textContent,'Нажми «Бито» — начнётся следующий заход.');assert(!h.query('.sd-control').textContent.includes('подкинуть ещё'));assert.equal(h.query('.sd-help'),null);assert.equal(h.query('[data-selection]').textContent,'');assert.equal(h.query('[data-play]'),null);
  h.all('[data-card]')[0].click();assert(h.query('[data-selection]').textContent.includes('уже шесть пар'));assert.deepEqual(h.actions,[]);
 });
+test('a one-card defender limit explains a matching unavailable card and stays correct with an old receipt',()=>{
+ for(const legacy of [false,true]){
+  const g=game(9);g.phase='resolve';g.roundLimit=1;g.players[1].handCount=0;g.table=[{a:{rank:'10',suit:'♦',id:'10♦'},d:{rank:'J',suit:'♣',id:'J♣'}}];g.legal={cards:[],actions:['finish','resign']};if(legacy)delete g.roundLimit;
+  const h=harness(g);assert(h.query('.sd-control-facts').textContent.includes('На столе 1 / 1'));h.query('[data-card="J♠"]').click();const note=h.query('[data-selection]').textContent;
+  assert(note.includes('Лимит этого захода — 1'));assert(note.includes('столько карт было у защитника в начале'));assert(!note.includes('Подходящих карт для подкидывания нет'));assert.equal(h.query('[data-play]'),null);assert.deepEqual(h.actions,[]);h.query('[data-action="finish"]').click();assert.deepEqual(h.actions,[{type:'finish'}]);
+ }
+});
+test('the public starting count gives the same limit before and after a defence without hidden cards',()=>{
+ const g=game(9);g.players[1].handCount=2;const h=harness(g);assert(h.query('.sd-control-facts').textContent.includes('На столе 0 / 2'));
+ g.players[1].handCount=1;g.phase='resolve';g.table=[{a:{rank:'10',suit:'♦',id:'10♦'},d:{rank:'J',suit:'♣',id:'J♣'}}];g.legal={cards:['J♠'],actions:['attack','finish','resign']};h.setState({game:g,revision:4});assert(h.query('.sd-control-facts').textContent.includes('На столе 1 / 2'));h.query('[data-card="J♠"]').click();assert.equal(h.query('[data-play]').disabled,false);assert(!h.query('[data-selection]').textContent.includes('Лимит этого захода'));h.query('[data-play]').click();assert.deepEqual(h.actions,[{type:'attack',cardId:'J♠'}]);
+});

@@ -31,7 +31,7 @@ function harness(options={}){
     insert(row){inserts.push(row);return Promise.resolve({})}
   })};
   const context={
-    window:{VEZDEHOT_AUTH_CONFIG:{url:'https://project.supabase.co',publishableKey:'public',googleEnabled:false,telegramEnabled:false,telegramProvider:'custom:telegram',...options.config},supabase:{createClient:(url,key,opts)=>{clientOptions=opts;return client}},addEventListener:(type,fn)=>listen('window',type,fn),Telegram:options.telegram},
+    window:{VEZDEHOT_AUTH_CONFIG:{url:'https://project.supabase.co',publishableKey:'public',googleEnabled:false,telegramEnabled:false,telegramProvider:'custom:telegram',...options.config},supabase:{createClient:(url,key,opts)=>{clientOptions=opts;return client}},addEventListener:(type,fn)=>listen('window',type,fn),Telegram:options.telegram,VEZDEHOT_TAB_SESSION:options.tabs},
     localStorage:{getItem:key=>{if(options.blockRead)throw new Error('Storage denied');return store.get(key)||null},setItem:(key,value)=>{if(options.blockWrite)throw new Error('Storage quota exceeded');store.set(key,value)}},
     document:{documentElement:{dataset:{}},addEventListener:(type,fn)=>listen('document',type,fn),dispatchEvent:event=>dispatch('document',event),querySelector:()=>null},
     CustomEvent:class{constructor(type,init){this.type=type;this.detail=init?.detail}},
@@ -275,11 +275,99 @@ test('failed PKCE initialization is reported even if getSession returns an older
 
 test('callback shows OAuth failure ahead of an older signed-in session and clears URL parameters',async()=>{
   const html=fs.readFileSync(path.join(__dirname,'../dist/auth-callback.html'),'utf8'),script=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
-  const nodes={title:{textContent:''},status:{textContent:''}},replaced=[];
+  const nodes={title:{textContent:''},status:{textContent:''},continue:{disabled:true,removeAttribute(){}}},replaced=[];
   const api={ready:Promise.resolve(),account:()=>({user:{id:A},status:'saved',error:'Подтверждение входа истекло.'})};
   const ctx={window:{VEZDEHOT:api},VEZDEHOT:api,document:{getElementById:id=>nodes[id]},history:{replaceState:(...args)=>replaced.push(args)},location:{pathname:'/auth-callback.html'}};
   vm.runInNewContext(script,ctx);await tick();
   assert.equal(nodes.title.textContent,'Вход не завершён');assert.match(nodes.status.textContent,/Ранее открытый аккаунт/);assert.equal(replaced[0][2],'/auth-callback.html');
+  assert.equal(nodes.continue.disabled,false);
+});
+
+test('failed tab ownership resolves readiness with an error and never enables game writes', {timeout:1000}, async t=>{
+  const tabs={start:async()=>{throw Error('lock failed')},canWrite:()=>false,ownsLock:()=>false,setWriteGuard(){}};
+  const h=harness({tabs,config:{checkpointsEnabled:true}});t.after(()=>h.close());
+  await h.api.ready;
+  assert.match(h.api.account().error,/не получила управление/);
+  assert.equal(h.clientOptions,undefined);assert.equal(h.requests.length,0);
+  const before=h.api.getProfile().balance;h.api.updateProfile({balance:42});h.api.saveMainState({game:'stale'});
+  assert.equal(h.api.getProfile().balance,before);assert.equal(h.store.size,0);
+  await assert.rejects(()=>h.api.login('telegram'),/активной вкладке/);
+});
+
+const miniAppConfig={telegramMiniAppEnabled:true,telegramAuthUrl:'https://project.supabase.co/functions/v1/telegram-auth'};
+for(const scenario of [
+  {name:'rate limit',status:429,pattern:/Подожди несколько секунд/,body:{error:'please_retry'}},
+  {name:'service outage',status:503,pattern:/временно недоступен/,body:{error:'private upstream failure'}},
+  {name:'invalid proof',status:401,pattern:/Telegram не подтвердил/,body:{error:'invalid_signature'}},
+  {name:'offline request',status:0,pattern:/Проверь соединение/,throwMessage:'Network timeout secret internal detail'}
+])test('Telegram '+scenario.name+' gives a persistent safe recovery message without exchanging an OTP',async t=>{
+  const h=harness({config:miniAppConfig,telegram:{WebApp:{initData:'signed-proof'}},fetch:async input=>{
+    if(!String(input).includes('/functions/'))return {ok:true,json:async()=>({external:{google:false}})};
+    if(scenario.throwMessage)throw Error(scenario.throwMessage);
+    return {ok:false,status:scenario.status,json:async()=>scenario.body};
+  }});t.after(()=>h.close());await h.api.ready;
+  await assert.rejects(()=>h.api.login('telegram'),scenario.pattern);
+  assert.match(h.api.account().error,scenario.pattern);assert.doesNotMatch(h.api.account().error,/secret|private|internal|invalid_signature/);
+  assert.equal(h.verifyCalls,0);assert.equal(h.api.account().scope,'guest');assert.equal(h.api.account().authPending,false);
+  const message={textContent:''};h.context.document.querySelector=selector=>selector==='#vh-account'?{querySelector:key=>key==='.vh-auth-message'?message:null,querySelectorAll:()=>[]}:null;
+  h.event('document','vezdehot:telegramready');assert.match(message.textContent,scenario.pattern);
+});
+
+test('a new Telegram attempt clears a previous outage and can complete normally',async t=>{
+  let available=false;const h=harness({config:miniAppConfig,telegram:{WebApp:{initData:'signed-proof'}},profiles:{[A]:profile('Telegram player')},fetch:async input=>{
+    if(!String(input).includes('/functions/'))return {ok:true,json:async()=>({external:{google:false}})};
+    return available?{ok:true,status:200,json:async()=>({token_hash:'valid-once',type:'magiclink'})}:{ok:false,status:503};
+  }});t.after(()=>h.close());await h.api.ready;
+  await assert.rejects(()=>h.api.login('telegram'),/временно недоступен/);
+  available=true;await h.api.login('telegram');
+  assert.equal(h.api.account().error,'');assert.equal(h.api.account().scope,A);assert.equal(h.verifyCalls,1);
+});
+
+test('a late Telegram outage cannot attach its error to a different account',async t=>{
+  const pending=deferred(),h=harness({config:miniAppConfig,telegram:{WebApp:{initData:'signed-proof'}},profiles:{[B]:profile('Current account')},fetch:async input=>String(input).includes('/functions/')?pending.promise:{ok:true,json:async()=>({external:{}})}});
+  t.after(()=>h.close());await h.api.ready;const login=h.api.login('telegram');h.auth(B);await tick();
+  pending.resolve({ok:false,status:503,json:async()=>({error:'auth_unavailable'})});
+  await assert.rejects(()=>login,/Активная вкладка или аккаунт изменились/);
+  assert.equal(h.api.account().scope,B);assert.equal(h.api.account().error,'');assert.equal(h.verifyCalls,0);
+});
+
+test('a previously displayed login error is cleared when another account becomes active',async t=>{
+  const h=harness({config:miniAppConfig,telegram:{WebApp:{initData:'signed-proof'}},profiles:{[B]:profile('Another account')},fetch:async input=>String(input).includes('/functions/')?{ok:false,status:503}:{ok:true,json:async()=>({external:{}})}});
+  t.after(()=>h.close());await h.api.ready;await assert.rejects(()=>h.api.login('telegram'),/временно недоступен/);
+  assert.match(h.api.account().error,/временно недоступен/);
+  h.auth(B);await tick();
+  assert.equal(h.api.account().scope,B);assert.equal(h.api.getProfile().nick,'Another account');assert.equal(h.api.account().error,'');
+});
+
+function callbackHarness(api){
+  const html=fs.readFileSync(path.join(__dirname,'../dist/auth-callback.html'),'utf8'),script=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
+  const control=html.match(/<button\b[^>]*\bid="continue"[^>]*>/)?.[0];assert(control,'the callback has a native button');
+  const busy=new Map([['aria-busy','true']]),nodes={title:{textContent:''},status:{textContent:''},continue:{disabled:/\sdisabled(?:\s|>)/.test(control),textContent:'',removeAttribute:key=>busy.delete(key)}};
+  const navigation=[],replaced=[];
+  const ctx={window:{VEZDEHOT:api},VEZDEHOT:api,document:{getElementById:id=>nodes[id]},history:{replaceState:(...args)=>replaced.push(args)},location:{pathname:'/auth-callback.html',assign:url=>navigation.push(url)}};
+  vm.runInNewContext(script,ctx);return {nodes,busy,navigation,replaced};
+}
+
+test('callback cannot leave during verification, then enables navigation after the result is visible',async()=>{
+  const pending=deferred(),h=callbackHarness({ready:pending.promise,account:()=>({user:{id:A},status:'saved',error:''})});
+  assert.equal(h.nodes.continue.disabled,true);h.nodes.continue.onclick();assert.equal(h.navigation.length,0);assert.equal(h.replaced.length,0);
+  pending.resolve();await tick();
+  assert.equal(h.nodes.title.textContent,'Ты в клубе');assert.match(h.nodes.status.textContent,/синхронизированы/);
+  assert.equal(h.nodes.continue.disabled,false);assert.equal(h.busy.has('aria-busy'),false);assert.equal(h.replaced[0][2],'/auth-callback.html');
+  h.nodes.continue.onclick();assert.deepEqual(h.navigation,['./index.html']);
+});
+
+test('callback rejects an initialization failure safely and still offers return to games',async()=>{
+  const pending=deferred(),h=callbackHarness({ready:pending.promise,account:()=>{throw Error('must not read an unready account')}});
+  pending.reject(Error('private OAuth diagnostic'));await tick();
+  assert.equal(h.nodes.title.textContent,'Вход не завершён');assert.doesNotMatch(h.nodes.status.textContent,/private|OAuth diagnostic/);
+  assert.equal(h.nodes.continue.disabled,false);assert.equal(h.replaced[0][2],'/auth-callback.html');h.nodes.continue.onclick();assert.equal(h.navigation.length,1);
+});
+
+test('callback with missing application scripts releases its return button and clears callback parameters',()=>{
+  const h=callbackHarness(undefined);
+  assert.equal(h.nodes.title.textContent,'Не удалось загрузить вход');assert.equal(h.nodes.continue.disabled,false);
+  assert.equal(h.replaced[0][2],'/auth-callback.html');h.nodes.continue.onclick();assert.deepEqual(h.navigation,['./index.html']);
 });
 
 for(const game of ['durak','poker','wallet']){

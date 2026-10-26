@@ -63,6 +63,13 @@ test('touch horizontal motion remains scrollable and cannot turn into a card sel
 test('touch vertical lift crosses the threshold before drag begins',()=>{
  const e=environment();e.fire('pointerdown',e.card,{pointerType:'touch'});e.fire('pointermove',e.card,{pointerType:'touch',clientX:132,clientY:425});assert.equal(e.ghosts().length,0);const moved=e.fire('pointermove',e.card,{pointerType:'touch',clientX:133,clientY:410});assert.equal(moved.defaultPrevented,true);assert.equal(e.ghosts().length,1);e.fire('pointerup',e.card,{clientX:140,clientY:200});assert.deepEqual(e.drops,['A♠']);
 });
+test('inspect-only cards leave both touch axes to the browser and retain a later intentional tap',()=>{
+ for(const point of [{clientX:175,clientY:432},{clientX:132,clientY:370}]){
+  const e=environment();e.setLegal(false);e.card.setAttribute('data-legal','0');const down=e.fire('pointerdown',e.card,{pointerType:'touch'}),move=e.fire('pointermove',e.card,{pointerType:'touch',...point});
+  assert.equal(down.defaultPrevented,false);assert.equal(move.defaultPrevented,false);assert.equal(e.card.captured.size,0);assert.equal(e.ghosts().length,0);assert.deepEqual(e.drops,[]);e.fire('pointercancel',e.card,{pointerType:'touch'});assert.deepEqual(e.cancels,[]);
+  e.fire('pointerdown',e.card,{pointerType:'touch'});e.fire('pointerup',e.card,{pointerType:'touch'});assert.equal(e.fire('click').defaultPrevented,false);assert.deepEqual(e.clicks,['tap']);
+ }
+});
 test('drag outside every drop zone restores the card without playing or selecting it',()=>{
  const e=environment();drag(e);e.fire('pointerup',e.card,{clientX:400,clientY:200});assert.equal(e.drops.length,0);assert.equal(e.ghosts().length,0);assert(!e.zone.classList.contains('vh-drop-over'));assert.equal(e.fire('click').defaultPrevented,true);assert.deepEqual(e.cancels,['invalid_drop']);
 });

@@ -212,7 +212,72 @@
       catch(_){if(current())set('conflict','Не удалось загрузить облачную версию. Локальные данные не изменены.');return false;}
     }
     function acceptCloud(){return run({accept:true});}
-    return Object.freeze({boot,sync,changed,status,canWrite,acceptCloud,recoverImport,invalidate(){valid=false;},snapshot:()=>capture().snapshot});
+    // Archives are evidence of a discarded local branch, never synchronization
+    // input. Inspect them without touching capture(), RPCs, the outbox or heads.
+    const archivePrefix=key+':archive:',archiveId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    const exactKeys=(value,fields)=>object(value)&&Object.keys(value).length===fields.length&&fields.every(field=>Object.hasOwn(value,field));
+    function archiveSnapshot(snapshot){
+      if(!exactKeys(snapshot,['format','version','profile','games'])||snapshot.format!==FORMAT||snapshot.version!==1||!exactKeys(snapshot.games,GAMES))throw Error('invalid-archive');
+      validateProfile(snapshot.profile);
+      for(const game of GAMES)o.validate(game,copy(snapshot.games[game]),{remote:true});
+    }
+    function archiveResults(results,snapshot){
+      if(!Array.isArray(results)||results.length>500)throw Error('invalid-archive-results');
+      const ids=new Set();
+      for(const entry of results){
+        if(!exactKeys(entry,resultFields))throw Error('invalid-archive-result');
+        const value=resultSnapshot(entry),history=snapshot.profile.history.find(row=>row.id===value.id);
+        if(ids.has(value.id)||!snapshot.profile.resultIds.includes(value.id)||history&&!equal(resultSnapshot(history),value))throw Error('invalid-archive-result');
+        ids.add(value.id);
+      }
+    }
+    function archiveHeads(heads){
+      return exactKeys(heads,['profile','games'])&&integer(heads.profile,Number.MAX_SAFE_INTEGER)&&exactKeys(heads.games,GAMES)&&GAMES.every(game=>integer(heads.games[game],Number.MAX_SAFE_INTEGER));
+    }
+    function validateArchive(value){
+      if(!exactKeys(value,['version','createdAt','scope','snapshot','pendingResults','meta'])||value.version!==1||value.scope!==scope||!integer(value.createdAt,8640000000000000))throw Error('invalid-archive');
+      archiveSnapshot(value.snapshot);archiveResults(value.pendingResults,value.snapshot);
+      const m=value.meta;
+      if(!exactKeys(m,['version','baseRevision','ackHeads','flight','updatedAt'])||m.version!==1||!(m.baseRevision===null||integer(m.baseRevision,Number.MAX_SAFE_INTEGER))||!(m.ackHeads===null||archiveHeads(m.ackHeads))||!(m.updatedAt===null||typeof m.updatedAt==='string'&&m.updatedAt.length<=64&&Number.isFinite(Date.parse(m.updatedAt))))throw Error('invalid-archive-meta');
+      if(m.flight!==null){
+        const f=m.flight;
+        if(!exactKeys(f,['id','expectedRevision','heads','snapshot','results'])||!archiveId.test(f.id)||!integer(f.expectedRevision,Number.MAX_SAFE_INTEGER)||!archiveHeads(f.heads))throw Error('invalid-archive-flight');
+        archiveSnapshot(f.snapshot);archiveResults(f.results,f.snapshot);
+      }
+      return value;
+    }
+    function readArchive(id,budget){
+      if(!current()||typeof id!=='string'||!archiveId.test(id)||typeof o.readArchive!=='function')return null;
+      try{
+        const raw=o.readArchive(archivePrefix+id);
+        if(typeof raw!=='string'||raw.length>8*1024*1024)return null;
+        if(budget){budget.remaining-=raw.length;if(budget.remaining<0){budget.exhausted=true;return null;}}
+        const archive=validateArchive(JSON.parse(raw));
+        return current()?copy(archive):null;
+      }catch(_){return null;}
+    }
+    function listArchives(){
+      const result={ok:false,entries:[],skipped:0,limited:false};
+      if(!current()||typeof o.archiveKeys!=='function')return result;
+      try{
+        const keys=o.archiveKeys(archivePrefix);
+        if(!Array.isArray(keys)||!current())return result;
+        const own=[...new Set(keys.filter(item=>typeof item==='string'&&item.startsWith(archivePrefix)&&archiveId.test(item.slice(archivePrefix.length))))];
+        result.limited=own.length>100;
+        const budget={remaining:16*1024*1024,exhausted:false};
+        for(const fullKey of own.slice(0,100)){
+          if(!current())return {ok:false,entries:[],skipped:0,limited:false};
+          const id=fullKey.slice(archivePrefix.length),archive=readArchive(id,budget);
+          if(budget.exhausted){result.limited=true;break;}
+          if(!archive){result.skipped++;continue;}
+          result.entries.push({id,createdAt:archive.createdAt,revision:archive.meta.baseRevision,nick:archive.snapshot.profile.nick,balance:archive.snapshot.profile.balance,pendingResults:archive.pendingResults.length,
+            games:GAMES.map(game=>{const state=archive.snapshot.games[game];return {game,status:state===null?'empty':finished(game,state)?'finished':'active'};})});
+        }
+        result.entries.sort((a,b)=>b.createdAt-a.createdAt||a.id.localeCompare(b.id));result.ok=current();
+        return result.ok?result:{ok:false,entries:[],skipped:0,limited:false};
+      }catch(_){return {ok:false,entries:[],skipped:0,limited:false};}
+    }
+    return Object.freeze({boot,sync,changed,status,canWrite,acceptCloud,recoverImport,listArchives,readArchive:id=>readArchive(id),invalidate(){valid=false;},snapshot:()=>capture().snapshot});
   }
   root.VEZDEHOT_CHECKPOINT=Object.freeze({create});
 })(window);

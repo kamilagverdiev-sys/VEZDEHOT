@@ -67,6 +67,20 @@ test('illegal actor, card, phase, fields and action do not mutate source',async(
  for(const bad of [{type:'bot'},{type:'take',actor:1},{type:'attack',cardId:'hacked'},{type:'defend',cardId:'A♣',actor:0},{type:'resign',cardId:'6♠'}]) assert.throws(()=>applyAction(g,bad));
  const opposite=legalActions(g).actions.includes('take')?'finish':'take';assert.throws(()=>applyAction(g,{type:opposite}));assert.deepEqual(g,before);
 });
+test('real endgames project their one- and two-card attack limits without revealing hands or changing legality',async()=>{
+ const e=await engine,found=new Set();
+ for(let seed=1;seed<=12&&found.size<2;seed++){
+  const random=seeded(seed);let g=e.createGame({bots:2,id:gameId},random);
+  for(let step=0;!g.over&&step<1000;step++){
+   const legal=e.legalActions(g);
+   if(g.attacker===0&&[1,2].includes(g.roundLimit)&&g.table.length===g.roundLimit&&legal.actions.includes('finish')){
+    const before=clone(g),projected=e.projectGame(g);assert.equal(projected.roundLimit,g.roundLimit);assert.deepEqual(projected.legal,legal);assert.equal(projected.legal.cards.length,0);assert(!Object.hasOwn(projected,'deck'));projected.players.slice(1).forEach(p=>assert(!Object.hasOwn(p,'hand')));assert.deepEqual(g,before);found.add(g.roundLimit);
+   }
+   const type=legal.actions.includes('defend')?'defend':legal.actions.includes('attack')?'attack':['finish','take','continue'].find(t=>legal.actions.includes(t));g=e.applyAction(g,{type,...(['attack','defend'].includes(type)?{cardId:legal.cards[0]}:{})},random);
+  }
+ }
+ assert.deepEqual([...found].sort(),[1,2]);
+});
 test('90 complete 2–4-player server games conserve every card and terminate without client bots',async()=>{
  const {createGame,applyAction,legalActions,assertIntegrity}=await engine;
  for(let bots=1;bots<=3;bots++)for(let trial=0;trial<30;trial++){

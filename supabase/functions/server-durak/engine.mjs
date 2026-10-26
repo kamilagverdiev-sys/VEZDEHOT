@@ -96,7 +96,7 @@ export function projectGame(g) {
   if(!g)return null;
   assertIntegrity(g);
   return {
-    id:g.id,phase:g.phase,round:g.round,trump:g.trump,trumpCard:publicCard(g.trumpCard),
+    id:g.id,phase:g.phase,round:g.round,roundLimit:g.roundLimit??null,trump:g.trump,trumpCard:publicCard(g.trumpCard),
     deckCount:g.deck.length,discardCount:g.discardCount,attacker:g.attacker,defender:g.defender,
     players:g.players.map((p,i)=>({name:p.name,face:p.face,handCount:p.hand.length,kind:p.kind,...(i===0?{hand:p.hand.map(publicCard)}:{botStyle:p.botStyle})})),
     table:g.table.map(p=>({a:publicCard(p.a),d:publicCard(p.d)})),

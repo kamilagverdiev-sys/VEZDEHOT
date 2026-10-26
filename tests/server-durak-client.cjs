@@ -36,6 +36,12 @@ test('a rejected illegal action clears its receipt attempt then reloads server s
 test('a projection containing hidden bot cards fails closed',async()=>{
  const g=game();g.players[1].hand=[card('A')];const h=harness(async()=>response(1,g));await h.controller.load();assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().game,null);
 });
+test('public round limits accept old receipts and valid limits but reject malformed or exceeded limits',async()=>{
+ const {projection}=ctx.window.VEZDEHOT_SERVER_DURAK;
+ for(const fields of [{},{roundLimit:null},...[1,2,3,4,5,6].map(roundLimit=>({roundLimit}))])assert.doesNotThrow(()=>projection(response(1,{...game(),...fields}).data));
+ for(const roundLimit of [0,7,-1,1.5,'1',true,{}]){const h=harness(async()=>response(1,{...game(),roundLimit}));await h.controller.load();assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().game,null);assert.match(h.controller.status().notice,/Лимит захода/);}
+ const g={...game(),roundLimit:1,table:[{a:card('7'),d:card('8')},{a:card('9'),d:card('10')}]};assert.throws(()=>projection(response(1,g).data),/Лимит захода/);
+});
 test('server revisions may not move backwards after a refresh',async()=>{
  let revision=8;const h=harness(async()=>response(revision));await h.controller.load();revision=5;await h.controller.load();assert.equal(h.controller.status().revision,8);assert.equal(h.controller.status().ready,false);assert.match(h.controller.status().notice,/устаревшая/);
 });
