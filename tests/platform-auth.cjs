@@ -370,8 +370,8 @@ test('callback with missing application scripts releases its return button and c
   assert.equal(h.replaced[0][2],'/auth-callback.html');h.nodes.continue.onclick();assert.deepEqual(h.navigation,['./index.html']);
 });
 
-for(const game of ['durak','poker','bunker','wallet']){
-const configKey={poker:'serverPokerUrl',durak:'serverDurakUrl',bunker:'serverBunkerUrl',wallet:'serverWalletUrl'}[game],method={poker:'serverPokerRequest',durak:'serverDurakRequest',bunker:'serverBunkerRequest',wallet:'serverWalletRequest'}[game],path='/server-'+game;
+for(const game of ['durak','poker','bunker','mafia','wallet']){
+const configKey={poker:'serverPokerUrl',durak:'serverDurakUrl',bunker:'serverBunkerUrl',mafia:'serverMafiaUrl',wallet:'serverWalletUrl'}[game],method={poker:'serverPokerRequest',durak:'serverDurakRequest',bunker:'serverBunkerRequest',mafia:'serverMafiaRequest',wallet:'serverWalletRequest'}[game],path='/server-'+game;
 test('server '+game+' uses only configured endpoint and keeps the access token inside transport',async t=>{
   const h=harness({config:{[configKey]:'https://project.supabase.co/functions/v1'+path},session:{...session(A),access_token:'fixture-token'},profiles:{[A]:profile('Signed player')},fetch:async input=>String(input).endsWith(path)?{ok:true,status:200,json:async()=>({state:null,revision:0})}:{ok:true,json:async()=>({external:{}})}});t.after(()=>h.close());await h.api.ready;
   const result=await h.api[method]({op:'load'}),request=h.requests.find(x=>String(x.input).endsWith(path));

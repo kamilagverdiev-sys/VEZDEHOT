@@ -147,3 +147,9 @@ test('Bunker wallet receipt keeps its 120 XP and renders the correct game name',
  assert.equal(w.history[0].game,'bunker');assert.equal(w.history[0].xp,120);assert.equal(w.xp,120);
  const html=walletMarkup({phase:'saved',ready:true,busy:false,pending:false,wallet:w,notice:'',serverNow:Date.parse(TIME),canClaim:true},true);assert.match(html,/Расчёт стола · Бункер/);assert.doesNotMatch(html,/undefined/);
 });
+
+test('Mafia wallet receipt keeps its 130 XP and renders the correct game name',()=>{
+ const w=projection({status:'ok',wallet:wallet(3,{balance:1150,xp:130,games:1,wins:1,history:[{id:OTHER,kind:'settlement',game:'mafia',tableId:ID,delta:250,xp:130,balance:1150,createdAt:TIME}]})});
+ assert.equal(w.history[0].game,'mafia');assert.equal(w.history[0].xp,130);assert.equal(w.xp,130);
+ const html=walletMarkup({phase:'saved',ready:true,busy:false,pending:false,wallet:w,notice:'',serverNow:Date.parse(TIME),canClaim:true},true);assert.match(html,/Расчёт стола · Мафия/);assert.doesNotMatch(html,/undefined/);
+});
