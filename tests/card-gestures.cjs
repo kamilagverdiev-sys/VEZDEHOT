@@ -10,7 +10,7 @@ class Target{
  removeEventListener(type,fn,capture){this.listeners.set(type,(this.listeners.get(type)||[]).filter(x=>x.fn!==fn||x.capture!==!!capture))}
 }
 class Element extends Target{
- constructor(doc,tag='div',attrs={},bounds={left:0,top:0,width:100,height:100}){super();this.ownerDocument=doc;this.tagName=tag.toUpperCase();this.attrs={...attrs};this.children=[];this.parentElement=null;this.bounds={...bounds};this.style={};this.captured=new Set();this.classes=new Set((attrs.class||'').split(' ').filter(Boolean));this.classList={add:(...v)=>v.forEach(x=>this.classes.add(x)),remove:(...v)=>v.forEach(x=>this.classes.delete(x)),contains:v=>this.classes.has(v),toggle:(v,on)=>{if(on===undefined)on=!this.classes.has(v);on?this.classes.add(v):this.classes.delete(v);return on}}}
+ constructor(doc,tag='div',attrs={},bounds={left:0,top:0,width:100,height:100}){super();this.ownerDocument=doc;this.tagName=tag.toUpperCase();this.attrs={...attrs};this.children=[];this.parentElement=null;this.bounds={...bounds};this.style={setProperty(name,value){this[name]=value},removeProperty(name){const previous=this[name]||'';delete this[name];return previous}};this.captured=new Set();this.classes=new Set((attrs.class||'').split(' ').filter(Boolean));this.classList={add:(...v)=>v.forEach(x=>this.classes.add(x)),remove:(...v)=>v.forEach(x=>this.classes.delete(x)),contains:v=>this.classes.has(v),toggle:(v,on)=>{if(on===undefined)on=!this.classes.has(v);on?this.classes.add(v):this.classes.delete(v);return on}}}
  get isConnected(){let node=this;while(node){if(node===this.ownerDocument.body)return true;node=node.parentElement}return false}
  get disabled(){return Object.hasOwn(this.attrs,'disabled')}
  set disabled(v){if(v)this.attrs.disabled='';else delete this.attrs.disabled}
@@ -98,6 +98,22 @@ test('a second pointer cancels the active card and never takes over the gesture'
 });
 test('the ghost has no duplicate IDs and cannot become a focusable or pointer target',()=>{
  const e=environment();drag(e);const ghost=e.ghosts()[0];assert.equal(ghost.getAttribute('id'),null);assert.equal(ghost.querySelectorAll('[id]').length,0);assert.equal(ghost.getAttribute('aria-hidden'),'true');assert.equal(ghost.getAttribute('tabindex'),'-1');assert.equal(ghost.getAttribute('inert'),'');assert.equal(ghost.style.pointerEvents,'none');assert.equal(e.card.getAttribute('id'),'original-card');e.binding.destroy();
+});
+test('a detached ghost preserves scoped card presentation without stretching the rotated layout box',()=>{
+ const e=environment();e.card.bounds={left:100,top:400,width:68,height:90};e.card.offsetWidth=58;e.card.offsetHeight=82;
+ const corner=e.symbol.appendChild(new Element(e.doc,'small'));
+ const presentation=new Map([
+  [e.card,{'box-sizing':'border-box',width:'58px',height:'82px','border-radius':'7px',transform:'matrix(.99,.05,-.05,.99,0,0)',filter:'none','will-change':'auto'}],
+  [e.symbol,{width:'58px',height:'82px',background:'linear-gradient(140deg, rgb(255, 253, 244), rgb(232, 225, 209))',color:'rgb(25, 57, 68)','font-family':'Georgia','font-size':'18px',filter:'brightness(1.05)','will-change':'auto'}],
+  [corner,{'font-size':'12px',top:'5px',left:'5px',transform:'matrix(-1,0,0,-1,0,0)'}]
+ ]),read=[];
+ e.win.getComputedStyle=node=>{assert(e.root.contains(node),'styles must come from the original card while still in its table');assert.equal(e.ghosts().length,0);read.push(node);const values=presentation.get(node),properties=Object.keys(values);return Object.assign(properties,{getPropertyValue:name=>values[name]||''})};
+ drag(e);const ghost=e.ghosts()[0],face=ghost.children[0],small=face.children[0];
+ assert.deepEqual(read,[e.card,e.symbol,corner]);assert.equal(ghost.parentElement,e.doc.body);assert.equal(ghost.style.width,'58px');assert.equal(ghost.style.height,'82px');assert.equal(ghost.style.transform,'none');assert.equal(ghost.style['border-radius'],'7px');assert.equal(Object.hasOwn(ghost.style,'filter'),false);assert.equal(Object.hasOwn(ghost.style,'will-change'),false);
+ for(const [name,value]of Object.entries(presentation.get(e.symbol)))assert.equal(face.style[name],value,name);
+ for(const [name,value]of Object.entries(presentation.get(corner)))assert.equal(small.style[name],value,name);
+ assert.equal(Number.parseFloat(ghost.style.left),140-(30/68)*58);assert.equal(Number.parseFloat(ghost.style.top),240-(30/90)*82);
+ e.fire('pointerup',e.card,{clientX:140,clientY:200});assert.deepEqual(e.drops,['A♠']);assert.equal(e.ghosts().length,0);
 });
 test('destroying or rebinding cancels the old drag and does not duplicate event handling',()=>{
  const e=environment();drag(e);e.rebind();assert.equal(e.ghosts().length,0);e.fire('pointerup',e.card,{clientX:140,clientY:200});assert.equal(e.drops.length,0);drag(e);e.fire('pointerup',e.card,{clientX:140,clientY:200});assert.deepEqual(e.drops,['A♠']);e.binding.destroy();e.binding.destroy();assert.equal(e.root.getAttribute('data-card-drag'),null);

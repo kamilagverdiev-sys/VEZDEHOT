@@ -47,15 +47,29 @@ function bind(options){
     return inside;
   }
   function moveGhost(s,x,y){s.ghost.style.left=(x-s.offsetX)+'px';s.ghost.style.top=(y-s.offsetY)+'px';hover(s,x,y)}
+  function copyPresentation(source,clone){
+    // The ghost lives outside the table so that scrolling containers cannot clip
+    // it. Snapshot the rendered card before losing its ancestor-scoped styles.
+    if(typeof win?.getComputedStyle!=='function')return null;
+    const style=win.getComputedStyle(source),size={width:style.getPropertyValue('width'),height:style.getPropertyValue('height')};
+    for(let i=0;i<style.length;i++){const property=style[i];clone.style.setProperty(property,style.getPropertyValue(property));}
+    for(let i=0;i<source.children.length;i++)copyPresentation(source.children[i],clone.children[i]);
+    return size;
+  }
   function begin(s,event){
     if(!allowed(s)||!allowed(s,true)){cancel('state_changed');return false}
     s.zones=zones().filter(zone=>zone.isConnected);if(!s.zones.length){cancel('no_drop_zone');return false}
-    const bounds=s.card.getBoundingClientRect(),ghost=s.card.cloneNode(true);
+    const bounds=s.card.getBoundingClientRect(),ghost=s.card.cloneNode(true),size=copyPresentation(s.card,ghost);
+    // These are drag effects supplied by .vh-card-ghost, not card presentation.
+    ghost.style.removeProperty('filter');ghost.style.removeProperty('will-change');
     ghost.removeAttribute('id');ghost.removeAttribute('autofocus');ghost.removeAttribute('aria-describedby');ghost.removeAttribute('aria-labelledby');
     for(const child of ghost.querySelectorAll('[id],[autofocus],[tabindex],button,a,input,select,textarea')){child.removeAttribute('id');child.removeAttribute('autofocus');child.setAttribute('tabindex','-1')}
     ghost.setAttribute('aria-hidden','true');ghost.setAttribute('tabindex','-1');ghost.setAttribute('inert','');ghost.classList.add('vh-card-ghost');ghost.classList.remove('vh-card-dragging');
-    Object.assign(ghost.style,{position:'fixed',zIndex:'2147483000',pointerEvents:'none',margin:'0',width:bounds.width+'px',height:bounds.height+'px',transform:'none',transition:'none',animation:'none'});
-    s.offsetX=Math.max(0,Math.min(bounds.width,s.startX-bounds.left));s.offsetY=Math.max(0,Math.min(bounds.height,s.startY-bounds.top));s.ghost=ghost;s.dragging=true;
+    // A fanned card's bounding rectangle includes its rotation. Keep its actual
+    // layout box, then map the pointer's relative position onto the straight card.
+    const layoutWidth=s.card.offsetWidth||bounds.width,layoutHeight=s.card.offsetHeight||bounds.height;
+    Object.assign(ghost.style,{position:'fixed',zIndex:'2147483000',pointerEvents:'none',margin:'0',width:size?.width&&size.width!=='auto'?size.width:layoutWidth+'px',height:size?.height&&size.height!=='auto'?size.height:layoutHeight+'px',transform:'none',transition:'none',animation:'none'});
+    s.offsetX=Math.max(0,Math.min(1,(s.startX-bounds.left)/(bounds.width||1)))*layoutWidth;s.offsetY=Math.max(0,Math.min(1,(s.startY-bounds.top)/(bounds.height||1)))*layoutHeight;s.ghost=ghost;s.dragging=true;
     doc.body.appendChild(ghost);s.card.classList.add('vh-card-dragging');doc.body.classList.add('vh-card-drag-active');
     s.zones.forEach(zone=>zone.classList.add('vh-drop-ready'));
     try{s.card.setPointerCapture?.(s.pointerId)}catch{}
