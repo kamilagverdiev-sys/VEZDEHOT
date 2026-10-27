@@ -150,3 +150,9 @@ test('wallet accepts the Mafia settlement alongside other games without dropping
  w.history.unshift({id:crypto.randomUUID(),kind:'settlement',game:'mafia',tableId:crypto.randomUUID(),delta:250,xp:130,balance:1150,createdAt:w.serverTime,private_state:'hidden'});
  const result=await json(await setup({loadReply:w}),{op:'load'});assert.equal(result.status,200);assert.equal(result.data.wallet.history[0].game,'mafia');assert.equal(result.data.wallet.xp,130);assert.equal(result.data.wallet.history[0].xp,130);assert.equal(result.data.wallet.history[0].delta,250);assert.equal('private_state' in result.data.wallet.history[0],false);
 });
+
+test('wallet exposes only public Monopoly settlement fields and keeps its XP',async()=>{
+ const w=wallet();Object.assign(w,{balance:1150,xp:100,games:1,wins:1});
+ w.history.unshift({id:crypto.randomUUID(),kind:'settlement',game:'monopoly',tableId:crypto.randomUUID(),delta:250,xp:100,balance:1150,createdAt:w.serverTime,private_state:'hidden'});
+ const result=await json(await setup({loadReply:w}),{op:'load'});assert.equal(result.status,200);assert.equal(result.data.wallet.history[0].game,'monopoly');assert.equal(result.data.wallet.xp,100);assert.equal(result.data.wallet.history[0].xp,100);assert.equal(result.data.wallet.history[0].delta,250);assert.equal('private_state' in result.data.wallet.history[0],false);
+});

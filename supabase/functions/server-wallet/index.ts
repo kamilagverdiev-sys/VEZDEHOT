@@ -34,7 +34,7 @@ export function projectWallet(value: unknown) {
   const history=v.history.map((entry: unknown)=>{
     if(!object(entry)||typeof entry.id!=='string'||entry.id.length<1||entry.id.length>100||!['welcome','daily','entry','settlement'].includes(entry.kind)||!integer(entry.delta,-Number.MAX_SAFE_INTEGER)||!integer(entry.xp)||!integer(entry.balance)||!date(entry.createdAt))unavailable();
     const e=entry as Record<string, any>,gameEvent=e.kind==='entry'||e.kind==='settlement';
-    if(gameEvent?(!['durak','poker','bunker','mafia'].includes(e.game)||typeof e.tableId!=='string'||!UUID.test(e.tableId)):(e.game!==null||e.tableId!==null))unavailable();
+    if(gameEvent?(!['durak','poker','bunker','mafia','monopoly'].includes(e.game)||typeof e.tableId!=='string'||!UUID.test(e.tableId)):(e.game!==null||e.tableId!==null))unavailable();
     return {id:e.id,kind:e.kind,game:e.game,tableId:e.tableId,delta:e.delta,xp:e.xp,balance:e.balance,createdAt:e.createdAt};
   });
   if(new Set(history.map((entry: {id: string})=>entry.id)).size!==history.length)unavailable();

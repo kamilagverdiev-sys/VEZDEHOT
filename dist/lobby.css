@@ -33,3 +33,5 @@ body:has(.club-app){background:radial-gradient(ellipse at 85% 0,#53326055,transp
 
 /* Shared protected wallet fills the online-games section, independently of practice. */
 .club-online .club-server-wallet{grid-column:1/-1;width:100%;max-width:none;margin:0}.club-online .sw-content p{font-size:12px;color:#c2d3dc}.club-online .sw-card h3{font-size:11px;letter-spacing:.04em}.club-online .sw-card .sw-note{font-size:10px;color:#91abbc}
+
+.club-online-game-wide{grid-column:1/-1}

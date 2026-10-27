@@ -6,6 +6,7 @@ window.VEZDEHOT_AUTH_CONFIG = Object.freeze({
   serverDurakUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-durak',
   serverPokerUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-poker',
   serverBunkerUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-bunker',
+  serverMonopolyUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-monopoly',
   serverMafiaUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-mafia',
   serverWalletUrl: 'https://cyzbraifdkrqicdsbuwe.supabase.co/functions/v1/server-wallet',
   googleEnabled: false,

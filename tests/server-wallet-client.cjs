@@ -153,3 +153,9 @@ test('Mafia wallet receipt keeps its 130 XP and renders the correct game name',(
  assert.equal(w.history[0].game,'mafia');assert.equal(w.history[0].xp,130);assert.equal(w.xp,130);
  const html=walletMarkup({phase:'saved',ready:true,busy:false,pending:false,wallet:w,notice:'',serverNow:Date.parse(TIME),canClaim:true},true);assert.match(html,/Расчёт стола · Мафия/);assert.doesNotMatch(html,/undefined/);
 });
+
+test('Monopoly wallet receipt preserves settlement and identifies its game',()=>{
+ const w=projection({status:'ok',wallet:wallet(3,{balance:1150,xp:100,games:1,wins:1,history:[{id:OTHER,kind:'settlement',game:'monopoly',tableId:ID,delta:250,xp:100,balance:1150,createdAt:TIME,private_state:'hidden'}]})});
+ assert.equal(w.history[0].game,'monopoly');assert.equal(w.history[0].xp,100);assert.equal(w.xp,100);assert.equal('private_state' in w.history[0],false);
+ const html=walletMarkup({phase:'saved',ready:true,busy:false,pending:false,wallet:w,notice:'',serverNow:Date.parse(TIME),canClaim:true},true);assert.match(html,/Расчёт стола · Монополия/);assert.doesNotMatch(html,/undefined|private_state/);
+});
