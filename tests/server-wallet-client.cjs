@@ -141,3 +141,9 @@ test('wallet refresh keeps a summary or action fallback focused and never steals
  h.button('data-wallet-claim').focus();await r.api.refresh();assert.equal(r.document.activeElement,h.summary(),'disappearing or disabled action falls back to the disclosure');
  r.document.activeElement=h.body;await r.api.refresh();assert.equal(r.document.activeElement,h.body);
 });
+
+test('Bunker wallet receipt keeps its 120 XP and renders the correct game name',()=>{
+ const w=projection({status:'ok',wallet:wallet(3,{balance:1150,xp:120,games:1,wins:1,history:[{id:OTHER,kind:'settlement',game:'bunker',tableId:ID,delta:250,xp:120,balance:1150,createdAt:TIME}]})});
+ assert.equal(w.history[0].game,'bunker');assert.equal(w.history[0].xp,120);assert.equal(w.xp,120);
+ const html=walletMarkup({phase:'saved',ready:true,busy:false,pending:false,wallet:w,notice:'',serverNow:Date.parse(TIME),canClaim:true},true);assert.match(html,/Расчёт стола · Бункер/);assert.doesNotMatch(html,/undefined/);
+});

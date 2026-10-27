@@ -138,3 +138,9 @@ test('outbound wallet requests use an 8-second AbortSignal deadline',async()=>{
   const r=await handle(request({op:'load'}));assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:'server_unavailable'});assert.deepEqual(deadlines,[8000]);
  } finally {global.setTimeout=original;}
 });
+
+test('wallet accepts the Bunker settlement alongside other games without dropping XP or exposing private fields',async()=>{
+ const w=wallet();Object.assign(w,{balance:1150,xp:120,games:1,wins:1});
+ w.history.unshift({id:crypto.randomUUID(),kind:'settlement',game:'bunker',tableId:crypto.randomUUID(),delta:250,xp:120,balance:1150,createdAt:w.serverTime,private_state:'hidden'});
+ const result=await json(await setup({loadReply:w}),{op:'load'});assert.equal(result.status,200);assert.equal(result.data.wallet.history[0].game,'bunker');assert.equal(result.data.wallet.xp,120);assert.equal(result.data.wallet.history[0].xp,120);assert.equal(result.data.wallet.history[0].delta,250);assert.equal('private_state' in result.data.wallet.history[0],false);
+});
