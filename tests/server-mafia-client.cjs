@@ -87,6 +87,46 @@ test('malformed players, ballots, legal actions and economy fail closed',()=>{
 test('pending request replacement by another tab cannot be silently deleted',async()=>{
  let resolve;const h=harness(b=>b.op==='load'?Promise.resolve(response(1)):new Promise(r=>resolve=r));await h.controller.load();const task=h.controller.act(reveal);await flush();const replacement=JSON.stringify({op:'start',actionId:ID,expectedRevision:2,difficulty:'hard'});h.store.setItem(pendingKey,replacement);resolve(response(2,game(),'saved'));await task;assert.equal(h.store.getItem(pendingKey),replacement);assert.equal(h.controller.status().ready,false);
 });
+
+test('a verified ACK recovers after request removal succeeds but its verification read fails once',async()=>{
+ for(const operation of ['start','action']){
+  const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false,accepted=false;
+  store.removeItem=key=>{remove(key);if(!failed)failRead=true};
+  store.getItem=key=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(key)};
+  const h=harness(async body=>{calls.push(copy(body));if(body.op==='load')return response(accepted?7:4,accepted||operation==='action'?game():null);accepted=true;return response(5,game(),'saved')},store);
+  await h.controller.load();await (operation==='start'?h.controller.start():h.controller.act(reveal));
+  assert.equal(failed,true);assert.equal(store.getItem(pendingKey),null);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);
+  const sent=calls.find(body=>body.op===operation),count=calls.length;assert(sent);assert.equal(await h.controller.act(reveal),false);assert.equal(await h.controller.start(),false);assert.equal(calls.length,count);
+  assert.equal(await h.controller.load(),true);
+  assert.deepEqual(calls.filter(body=>body.op===operation),[sent,sent]);assert.equal(sent.actionId,ID);assert.equal(sent.expectedRevision,4);assert.deepEqual(calls.map(body=>body.op),['load',operation,operation,'load']);
+  assert.equal(h.controller.status().revision,7);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().pending,false);assert.equal(store.getItem(pendingKey),null);
+ }
+});
+test('a different pending request is preserved if it appears after a partial-clear failure',async()=>{
+ const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false;
+ store.removeItem=key=>{remove(key);if(!failed)failRead=true};
+ store.getItem=key=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(key)};
+ const h=harness(async body=>{calls.push(copy(body));return body.op==='load'?response(4):response(5,game(),'saved')},store);
+ await h.controller.load();await h.controller.act(reveal);assert.equal(failed,true);assert.equal(store.getItem(pendingKey),null);
+ const replacement=JSON.stringify({op:'start',actionId:SCOPE,expectedRevision:7,difficulty:'hard'});
+ store.setItem(pendingKey,replacement);assert.equal(await h.controller.load(),false);
+ assert.equal(store.getItem(pendingKey),replacement);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().revision,4);
+ assert.deepEqual(calls.map(body=>body.op),['load','action','action']);assert.deepEqual(calls[2],calls[1]);assert.equal(await h.controller.act(reveal),false);assert.equal(calls.length,3);
+});
+test('ownership loss during a partial-clear retry never clears missing, replaced or restored storage',async()=>{
+ for(const stored of ['missing','replacement','original']){
+  const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false,removeCount=0,sends=0,resolve,confirmed=0;
+  store.removeItem=key=>{removeCount++;remove(key);if(!failed)failRead=true};
+  store.getItem=key=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(key)};
+  const h=harness(body=>{calls.push(copy(body));if(body.op==='load')return Promise.resolve(response(4));if(++sends===1)return Promise.resolve(response(5,game(),'saved'));return new Promise(done=>resolve=done)},store,{onConfirmed:()=>confirmed++});
+  await h.controller.load();await h.controller.act(reveal);assert.equal(store.getItem(pendingKey),null);assert.equal(removeCount,1);
+  const before=stored==='missing'?null:stored==='original'?JSON.stringify(calls[1]):JSON.stringify({op:'start',actionId:SCOPE,expectedRevision:7,difficulty:'hard'});
+  if(before!==null)store.setItem(pendingKey,before);
+  const retry=h.controller.load();await flush();h.deactivate();resolve(response(5,game(),'saved'));await retry;
+  assert.equal(store.getItem(pendingKey),before);assert.equal(removeCount,1);assert.equal(confirmed,1);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().revision,4);assert.deepEqual(calls.map(body=>body.op),['load','action','action']);assert.deepEqual(calls[2],calls[1]);
+ }
+});
+
 test('accepted ACK with failed read never repeats the accepted action and sets revision floor',async()=>{
  let revision=4;const calls=[],h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(revision):response(5,game(),'saved')});await h.controller.load();await h.controller.act(reveal);assert.equal(h.controller.status().revision,5);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().pending,false);revision=7;await h.controller.load();assert.equal(h.controller.status().ready,true);assert.equal(calls.filter(b=>b.op==='action').length,1);
 });

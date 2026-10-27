@@ -41,7 +41,9 @@ function createController(options){
     try{const saved=JSON.parse(raw);if(!validFlight(saved))throw new Error();flight=saved}catch{throw new Error('Сохранённый запрос бонуса повреждён. Его нельзя безопасно отправить повторно.')}
   }
   function clear(){
-    own();try{if(options.storage.getItem(key)!==JSON.stringify(flight))throw new Error();options.storage.removeItem(key);if(options.storage.getItem(key)!==null)throw new Error()}catch{throw new Error('Ответ получен, но подтверждение не сохранено на устройстве. Повтори тот же запрос.')}
+    // The verified receipt can be retried after removal succeeded but its
+    // readback failed. Never remove a different pending request in that case.
+    own();try{const raw=options.storage.getItem(key);if(raw!==null&&raw!==JSON.stringify(flight))throw new Error();if(raw!==null){options.storage.removeItem(key);if(options.storage.getItem(key)!==null)throw new Error()}}catch{throw new Error('Ответ получен, но подтверждение не сохранено на устройстве. Повтори тот же запрос.')}
     flight=null;
   }
   async function fetchWallet(){

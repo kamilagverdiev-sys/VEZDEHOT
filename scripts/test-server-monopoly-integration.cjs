@@ -43,7 +43,7 @@ const nextAction=g=>({type:g.phase==='ready'?'roll':g.phase==='buy'?'buy':'conti
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(root,'dist/server-monopoly.js'),'utf8'),context);
   const makeController=context.window.VEZDEHOT_SERVER_MONOPOLY.createController;
   const values=new Map(),storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
-  const controller=()=>makeController({scope:uid,current:()=>true,storage,uuid:()=>crypto.randomUUID(),request});
+  const controller=(deviceStorage=storage,onConfirmed)=>makeController({scope:uid,current:()=>true,storage:deviceStorage,uuid:()=>crypto.randomUUID(),request,onConfirmed});
   const mutation=(current,action)=>({op:'action',actionId:crypto.randomUUID(),expectedRevision:current.revision,gameId:current.game.id,action});
   const stored=async()=>(await db.query('select state from vezdehot_private.server_monopoly_games where user_id=$1',[uid])).rows[0].state,seen=new Set();
   async function projection(state){
@@ -99,7 +99,29 @@ const nextAction=g=>({type:g.phase==='ready'?'roll':g.phase==='buy'?'buy':'conti
   let winSeed=null;
   for(let seed=1;seed<=30&&!winSeed;seed++){const source=rng(seed);let g=createGame({stake:100},source);for(let n=0;!g.over&&n<180;n++)g=applyAction(g,nextAction(g),source);assert(g.over);if(g.finishKind==='capital'&&g.economy.outcome==='win')winSeed=seed;}
   assert(winSeed,'Seeded fixture includes an 80-turn capital win');
-  const beforeWin=await start(winSeed);current=await finish(current,true);assert.equal(current.game.turnNumber,80);assert.equal(current.game.finishKind,'capital');assert.equal(current.game.economy.outcome,'win');assert.equal(current.game.resigned,false,'A stale exit on the final review cannot erase an earned result');await verifySettlement(beforeWin,current);
+  const beforeWin=await start(winSeed);
+  for(let n=0;n<180&&!(current.game.turnNumber===80&&current.game.phase==='review');n++)current=await step(current,nextAction(current.game));
+  assert.equal(current.game.turnNumber,80);assert.equal(current.game.phase,'review');assert.equal(current.game.over,false);
+  const device=()=>{const records=new Map();return {records,getItem:k=>records.get(k)??null,setItem:(k,v)=>records.set(k,v),removeItem:k=>records.delete(k)}};
+  const deviceA=device(),deviceB=device();let confirmedA=0;
+  const a=controller(deviceA,()=>confirmedA++),b=controller(deviceB);assert(await a.load());
+  const beforeFinal=current,confirmationsBefore=confirmedA;
+  // Even a stale exit request on the final review must settle the earned result.
+  loseReply=true;assert.equal(await a.act({type:'resign'}),false);assert(a.status().pending);assert.equal(confirmedA,confirmationsBefore);
+  const lostFinal=JSON.parse([...deviceA.records.values()][0]),drawsAtFinal=randomCalls;
+  assert(await b.load());current=copy(b.status());assert.equal(current.revision,beforeFinal.revision+1);assert.equal(current.game.finishKind,'capital');assert.equal(current.game.economy.outcome,'win');assert.equal(current.game.resigned,false);await verifySettlement(beforeWin,current);
+  const completedId=current.game.id,settledWallet=await balance();
+  // Another independent browser starts a new paid table before A receives its old ACK.
+  random=rng(1);assert(await b.start('normal',100));current=copy(b.status());const rematchId=current.game.id,rematchWallet=await balance();
+  assert.notEqual(rematchId,completedId);assert.equal(current.game.over,false);assert.equal(rematchWallet.balance,settledWallet.balance-100);assert.equal(rematchWallet.games,settledWallet.games);assert.equal(rematchWallet.xp,settledWallet.xp);
+  const drawsBeforeRetry=randomCalls;assert(drawsBeforeRetry>=drawsAtFinal);assert(await a.load());
+  assert.equal(a.status().pending,false);assert.equal(deviceA.records.size,0);assert.equal(deviceB.records.size,0);assert.equal(a.status().revision,current.revision);assert.deepEqual(copy(a.status().game),current.game,'Old receipt must lead to the current rematch, never replace it with the finished table');assert(confirmedA>confirmationsBefore);
+  assert.equal(randomCalls,drawsBeforeRetry,'Recovery never rolls or creates another table');assert.equal(commitCount(lostFinal.actionId),1);
+  const walletAfterRetry=await balance();for(const field of ['balance','xp','games','wins','revision'])assert.equal(walletAfterRetry[field],rematchWallet[field]);
+  const finalLedger=(await db.query("select kind,count(*)::int n from vezdehot_private.server_wallet_ledger where user_id=$1 and table_id=$2 group by kind",[uid,completedId])).rows;
+  assert.equal(finalLedger.length,2);assert(finalLedger.every(row=>row.n===1));await projection(a.status());a.destroy();
+  assert(await b.act({type:'resign'}));current=copy(b.status());await verifySettlement(rematchWallet,current);b.destroy();
+  console.log('PASS two independent devices: lost final ACK, exact paid settlement, paid rematch and old receipt recovery preserve one current table and one ledger result');
   console.log('PASS complete 80-turn paid win/loss through Edge and SQL: 250 V / 100 XP or 0 V / 25 XP, exactly once');
 
   const beforeFree=await start(winSeed,0,'hard');current=await finish(current);await verifySettlement(beforeFree,current);

@@ -63,6 +63,43 @@ test('failure clearing an acknowledged attempt replays exactly that attempt befo
  const h=harness(async b=>{calls.push(copy(b));return b.op==='load'?response(++reads===1?4:5):receipt()},store);await h.controller.load();await h.controller.claimDaily();assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);fail=false;await h.controller.load();assert.equal(h.controller.status().ready,true);assert.deepEqual(calls.filter(b=>b.op==='claimDaily'),[{op:'claimDaily',actionId:ID},{op:'claimDaily',actionId:ID}]);assert.equal(h.store.getItem(key),null);
 });
 
+test('lost daily ACK and a failed removal readback recover with the same claim before a fresh wallet read',async()=>{
+ for(const outcome of ['saved','cooldown']){
+  const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false,claims=0,loads=0,removals=0;
+  store.removeItem=k=>{remove(k);removals++;if(!failed)failRead=true};
+  store.getItem=k=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(k)};
+  const h=harness(async body=>{calls.push(copy(body));if(body.op==='load')return ++loads===1?response(4):response(outcome==='saved'?7:4,{balance:outcome==='saved'?1700:1000,bonusAvailableAt:LATER});if(++claims===1)throw Error('Lost daily ACK');return receipt(outcome)},store);
+  await h.controller.load();await h.controller.claimDaily();const saved=store.getItem(key);assert(saved);assert.equal(h.controller.status().pending,true);
+  assert.equal(await h.controller.load(),false);assert.equal(failed,true);assert.equal(store.getItem(key),null);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);
+  assert.equal(await h.controller.claimDaily(),false);assert.equal(claims,2);assert.equal(await h.controller.load(),true);
+  assert.deepEqual(calls.filter(body=>body.op==='claimDaily'),Array(3).fill(JSON.parse(saved).body));assert.deepEqual(calls.map(body=>body.op),['load','claimDaily','claimDaily','claimDaily','load']);assert.equal(removals,1);assert.equal(store.getItem(key),null);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().wallet.revision,outcome==='saved'?7:4);assert.equal(h.controller.status().wallet.balance,outcome==='saved'?1700:1000);assert.equal(h.controller.status().canClaim,false);
+ }
+});
+
+test('a replacement daily request is never deleted after an earlier partial clear',async()=>{
+ const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false,removals=0;
+ store.removeItem=k=>{remove(k);removals++;if(!failed)failRead=true};store.getItem=k=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(k)};
+ const h=harness(async body=>{calls.push(copy(body));return body.op==='load'?response(4):receipt()},store);await h.controller.load();await h.controller.claimDaily();assert.equal(store.getItem(key),null);
+ const replacement=JSON.stringify({version:1,body:{op:'claimDaily',actionId:OTHER},seenRevision:7});store.setItem(key,replacement);assert.equal(await h.controller.load(),false);
+ assert.equal(store.getItem(key),replacement);assert.equal(removals,1);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().wallet.revision,4);assert.deepEqual(calls.map(body=>body.op),['load','claimDaily','claimDaily']);assert.deepEqual(calls[2],calls[1]);
+});
+
+test('late daily recovery cannot finish after ownership loss with missing or replaced storage',async()=>{
+ for(const replacement of [null,JSON.stringify({version:1,body:{op:'claimDaily',actionId:OTHER},seenRevision:7})]){
+  const store=memory(),read=store.getItem,remove=store.removeItem,calls=[];let failRead=false,failed=false,claims=0,removals=0,resolve;
+  store.removeItem=k=>{remove(k);removals++;if(!failed)failRead=true};store.getItem=k=>{if(failRead){failRead=false;failed=true;throw Error('Transient storage read failure')}return read(k)};
+  const h=harness(body=>{calls.push(copy(body));if(body.op==='load')return Promise.resolve(response(4));if(++claims===1)return Promise.resolve(receipt());return new Promise(done=>resolve=done)},store);
+  await h.controller.load();await h.controller.claimDaily();assert.equal(store.getItem(key),null);if(replacement!==null)store.setItem(key,replacement);
+  const retry=h.controller.load();await flush();const published=h.events.length;h.deactivate();resolve(receipt());await retry;
+  assert.equal(store.getItem(key),replacement);assert.equal(removals,1);assert.equal(h.events.length,published);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().wallet.revision,4);assert.deepEqual(calls.map(body=>body.op),['load','claimDaily','claimDaily']);assert.deepEqual(calls[2],calls[1]);
+ }
+});
+
+test('a missing pending record never makes a wrong-action daily receipt acceptable',async()=>{
+ const store=memory(),calls=[],h=harness(async body=>{calls.push(copy(body));if(body.op==='load')return response(4);store.removeItem(key);return receipt('saved',OTHER)},store);
+ await h.controller.load();await h.controller.claimDaily();assert.equal(store.getItem(key),null);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().wallet.revision,4);assert.deepEqual(calls.map(body=>body.op),['load','claimDaily']);
+});
+
 test('corrupt persisted requests fail closed before any request, including repeated refresh',async()=>{
  for(const saved of ['not json',JSON.stringify({op:'claimDaily',actionId:ID}),JSON.stringify({version:1,body:{op:'claimDaily',actionId:ID,amount:1000},seenRevision:3})]){
   const store=memory(),calls=[];store.setItem(key,saved);const h=harness(async b=>{calls.push(copy(b));return response()},store);await h.controller.load();await h.controller.load();assert.equal(calls.length,0);assert.equal(h.controller.status().ready,false);assert.equal(store.getItem(key),saved);

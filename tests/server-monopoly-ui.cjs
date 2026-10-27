@@ -45,6 +45,15 @@ test('names and ledger text remain escaped in every displayed personal entry',()
 test('a bankrupt bot can remain the reviewed mover before the next living player continues',()=>{
  let g=engine.createGame({id:ID});g.turn=1;g.turnNumber=2;g.phase='review';g.players[1].alive=false;g.bank+=g.players[1].money;g.players[1].money=0;g.message='Мира обанкротилась.';const p=engine.projectGame(g);assert.doesNotThrow(()=>valid(p));assert.match(ui.playersMarkup(p),/Банкрот/);assert.match(ui.commandText(p),/Ход игрока Мира завершён/);g=engine.applyAction(g,{type:'continue'},seeded(1));assert.equal(g.turn,2);
 });
+test('final review explains confirmed capital scoring for either mover instead of promising another turn',()=>{
+ for(const stake of [0,100])for(const turn of [0,3]){
+  const state=engine.createGame({id:ID,stake},seeded(1));state.turnNumber=80;state.turn=turn;state.phase='review';
+  const game=engine.projectGame(state);assert.doesNotThrow(()=>valid(game));assert.deepEqual(copy(game.legal.actions),['continue']);assert.equal(game.economy.settled,false);
+  const text=ui.commandText(game);assert.match(text,/Все 80 ходов сыграны/);assert.match(text,/Подвести итоги/);assert.match(text,/капитал.*наличные.*стоимость объектов/);assert.match(text,/после подтверждения сервера/);assert.doesNotMatch(text,/следующему игроку|передай ход|Ход игрока .* завершён/);
+  const result=engine.applyAction(state,{type:'continue'},()=>{throw Error('Final scoring must not roll again')});assert.equal(result.over,true);assert.equal(result.finishKind,'capital');assert.equal(result.turnNumber,80);assert.equal(result.economy.settled,true);
+  state.turnNumber=79;assert.doesNotMatch(ui.commandText(engine.projectGame(state)),/Все 80 ходов|Подвести итоги/);
+ }
+});
 test('real forced sale projection validates exact sale arithmetic and rejects forged receipts',()=>{
  let g=engine.createGame({id:ID});for(const i of [5,2,1]){g.players[0].money-=g.board[i].price;g.bank+=g.board[i].price;g.players[0].properties.push(i);g.board[i].owner=0;}g.bank+=g.players[0].money;g.players[0].money=0;
  g=engine.applyAction(g,{type:'roll'},()=>.2);const p=engine.projectGame(g);assert.doesNotThrow(()=>valid(p));assert.equal(p.lastPayment.sales.length,2);const html=ui.paymentMarkup(p);assert.match(html,/Маяк/);assert.match(html,/Оранжерея/);assert.match(html,/430 → 200 ¤/);assert.match(html,/0 → 30 ¤/);

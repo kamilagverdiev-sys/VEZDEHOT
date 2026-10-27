@@ -189,7 +189,7 @@ function controls(){
   return '<button class="btn" disabled>Соперник готовится…</button>';
 }
 function header(){
-  return '<header class="mono-top"><a class="icon-button" href="./index.html" aria-label="Вернуться в лобби">‹</a><a class="brand" href="./index.html">VEZDEHOT<small>ИГРОВОЙ КЛУБ</small></a><span class="top-spacer"></span><button class="wallet" data-account aria-label="Открыть профиль, баланс '+fmt(balance)+' монет"><span>'+fmt(balance)+' V</span><small>твой профиль</small></button><button class="icon-button" data-rules aria-label="Правила и обучение Монополии">?</button>'+(game&&!game.over?'<button class="icon-button" data-pause aria-label="'+(game.paused?'Продолжить партию':'Приостановить партию')+'">'+(game.paused?'▶':'Ⅱ')+'</button>':'')+'</header>';
+  return '<header class="mono-top"><a class="icon-button" href="./index.html?view=lobby" aria-label="Вернуться в лобби">‹</a><a class="brand" href="./index.html?view=lobby">VEZDEHOT<small>ИГРОВОЙ КЛУБ</small></a><span class="top-spacer"></span><button class="wallet" data-account aria-label="Открыть профиль, баланс '+fmt(balance)+' монет"><span>'+fmt(balance)+' V</span><small>твой профиль</small></button><button class="icon-button" data-rules aria-label="Правила и обучение Монополии">?</button>'+(game&&!game.over?'<button class="icon-button" data-pause aria-label="'+(game.paused?'Продолжить партию':'Приостановить партию')+'">'+(game.paused?'▶':'Ⅱ')+'</button>':'')+'</header>';
 }
 function turnStrip(){
   var p=game.players[game.turn],stage=game.phase==='buy'?1:game.phase==='review'||game.over?2:0;

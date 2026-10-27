@@ -1,4 +1,4 @@
-const CACHE = 'vezdehot-v29';
+const CACHE = 'vezdehot-v30';
 const ASSETS = [
   './', './index.html', './durak.css', './card-gestures.css', './card-gestures.js', './bunker.css', './lobby.css', './platform.css',
   './poker.html', './poker.css', './poker-equity.js', './mafia.html', './monopoly.html', './monopoly.css', './server-durak.html', './server-durak.css', './server-durak.js', './server-poker.html', './server-poker.css', './server-poker.js', './server-bunker.html', './server-bunker.css', './server-bunker.js', './server-mafia.html', './server-mafia.css', './server-mafia.js', './server-monopoly.html', './server-monopoly.css', './server-monopoly.js', './manifest.webmanifest',

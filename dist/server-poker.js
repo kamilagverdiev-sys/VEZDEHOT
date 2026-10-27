@@ -51,7 +51,9 @@ function createController(options){
   const current=()=>!disposed&&options.current()===true;
   const publish=()=>{if(current())options.onChange?.({...state,busy,pending:!!flight})};
   const own=()=>{if(!current())throw Object.assign(new Error('Управление передано другой вкладке или аккаунту.'),{code:'STALE_ACCOUNT'})};
-  const clear=()=>{own();const raw=options.storage.getItem(key);if(raw!==JSON.stringify(flight))throw new Error('Сохранённый запрос изменился. Обнови страницу перед следующим ходом.');options.storage.removeItem(key);if(options.storage.getItem(key)!==null)throw new Error('Не удалось подтвердить ответ на устройстве. Повтори запрос.');flight=null;};
+  // Removal may have succeeded before its verification read failed. A missing
+  // record is safe after the same acknowledged request; a replacement is not.
+  const clear=()=>{own();const raw=options.storage.getItem(key);if(raw!==null&&raw!==JSON.stringify(flight))throw new Error('Сохранённый запрос изменился. Обнови страницу перед следующим ходом.');if(raw!==null){options.storage.removeItem(key);if(options.storage.getItem(key)!==null)throw new Error('Не удалось подтвердить ответ на устройстве. Повтори запрос.');}flight=null;};
   const stage=body=>{own();const raw=JSON.stringify(body);options.storage.setItem(key,raw);if(options.storage.getItem(key)!==raw)throw new Error('Не удалось сохранить запрос. Освободи память браузера и повтори.');flight=JSON.parse(raw)};
   const call=async body=>{own();const result=await options.request(JSON.parse(JSON.stringify(body)));own();return result};
   const confirmWallet=(revision,force=false)=>{if(!current()||!force&&revision<=lastConfirmedRevision)return;lastConfirmedRevision=Math.max(lastConfirmedRevision,revision);try{Promise.resolve(options.onConfirmed?.()).catch(()=>{});}catch{}};
