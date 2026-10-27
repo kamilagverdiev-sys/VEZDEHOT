@@ -50,4 +50,42 @@ test('saved-session launch restores its shelf button and missing lobby controls 
   const h=navigationHarness();h.render();h.document.activeElement=h.element('resume',{inApp:true,dataset:{clubResume:'durak'}});h.window.scrollY=400;h.state.view='game';h.render();const replacement=h.element('new-resume',{inApp:true,tabIndex:0});h.nodes.set('[data-club-resume="durak"]',replacement);h.state.view='lobby';h.render();assert.equal(h.document.activeElement,replacement);assert.equal(h.window.scrollY,400);
   h.state.view='room';h.render();h.nodes.clear();h.state.view='lobby';h.render();assert.equal(h.document.activeElement,h.heading);
 });
+// Exercise the production startup block and room selection, with a stale saved
+// game that would visibly advance if startup restored it before reading the URL.
+const boot=html.slice(html.lastIndexOf('    s=load();'),html.lastIndexOf('  })();'));
+const gameKind=html.slice(html.indexOf('    function mainGameKind('),html.indexOf('    function mainScope('));
+const rememberGame=html.slice(html.indexOf('    function rememberMainGame('),html.indexOf('    function saveMainMetadata('));
+const chooseRoom=html.slice(html.indexOf('    function chooseMainRoom('),html.indexOf('    function resumeMainGame('));
+function startupHarness(search='',active='durak',options={}){
+  const durak={id:'saved-durak',players:[{hand:['6♠']},{hand:['7♠']}],deck:[],phase:'defend',over:false,paused:false,diff:'hard',stake:100};
+  const bunker={id:'saved-bunker',players:[{cards:['profession']}],phase:'voteResult',over:false,paused:false,diff:'normal'};
+  const state={view:active==='durak'?'game':'bunker',activeGame:active,game:active==='durak'?durak:bunker,savedGames:{durak,bunker},room:{mode:active,scenarioChoice:'random'}};
+  if(options.terminal){state.game.over=true;state.game.settled=false;}
+  const calls={renders:[],saves:[],advanced:0,normalized:0,settled:0,cleared:0,history:[],profiles:0},listeners={};
+  const ctx={s:null,URLSearchParams,location:{search,pathname:'/index.html'},history:{replaceState(...args){calls.history.push(args)}},navigator:{},document:{hidden:false,addEventListener:(name,fn)=>listeners[name]=fn},window:{addEventListener(){},VEZDEHOT:{openAccount(){calls.profiles++}}},load:()=>state,mainWritable:()=>options.writable!==false,code:()=> 'ABC234',normalizeBunkerChoice:value=>value||'random',clearDurakTimer(){calls.cleared++},save(){calls.saves.push({view:state.view,activeGame:state.activeGame,phase:state.game?.phase})},render(){calls.renders.push({view:state.view,mode:state.room.mode,game:state.game?.id,phase:state.game?.phase})},advance(){calls.advanced++;state.game.phase='advanced'},normalizeDurakGame(){calls.normalized++},settle(game){calls.settled++;game.settled=true},settleBunker(game){calls.settled++;game.settled=true}};
+  vm.createContext(ctx);vm.runInContext(gameKind+rememberGame+chooseRoom+boot,ctx);return {state,durak,bunker,calls,listeners};
+}
+test('server-to-lobby launch renders only the lobby and preserves the selected local game without advancing it',()=>{
+  for(const active of ['durak','bunker']){
+    const h=startupHarness('?view=lobby',active),saved=active==='durak'?h.durak:h.bunker;
+    assert(h.calls.renders.length>0);assert(h.calls.renders.every(frame=>frame.view==='lobby'));assert.equal(h.calls.advanced,0);assert.equal(h.calls.normalized,0);assert.equal(h.calls.settled,0);assert.equal(h.state.game,saved);assert.equal(h.state.savedGames[active],saved);assert.equal(h.state.activeGame,active);assert.equal(saved.phase,active==='durak'?'defend':'voteResult');assert(h.calls.saves.every(frame=>frame.view==='lobby'));assert.equal(h.calls.history.length,0);
+  }
+});
+test('explicit lobby navigation does not settle an old local result as a side effect',()=>{
+  for(const active of ['durak','bunker']){const h=startupHarness('?view=lobby',active,{terminal:true});assert.equal(h.calls.settled,0);assert.equal(h.state.game.settled,false);assert.equal(h.calls.advanced,0);assert(h.calls.renders.every(frame=>frame.view==='lobby'));}
+});
+test('explicit game launch chooses its saved room before first paint, keeps both games and cleans the URL',()=>{
+  for(const mode of ['durak','bunker']){
+    const h=startupHarness('?view=lobby&game='+mode+'&profile=1',mode==='durak'?'bunker':'durak'),chosen=mode==='durak'?h.durak:h.bunker;
+    assert(h.calls.renders.length>0);assert(h.calls.renders.every(frame=>frame.view==='room'&&frame.mode===mode&&frame.game===chosen.id));assert.equal(h.state.game,chosen);assert.equal(h.state.savedGames.durak,h.durak);assert.equal(h.state.savedGames.bunker,h.bunker);assert.equal(h.calls.advanced,0);assert.equal(h.calls.normalized,0);assert.equal(h.calls.settled,0);assert.equal(h.durak.phase,'defend');assert.equal(h.bunker.phase,'voteResult');assert.deepEqual(h.calls.history,[[null,'','/index.html']]);assert.equal(h.calls.profiles,1);
+  }
+});
+test('unknown game does not override an explicit lobby, and a read-only game launch still paints safely',()=>{
+  const invalid=startupHarness('?view=lobby&game=unknown');assert(invalid.calls.renders.every(frame=>frame.view==='lobby'));assert.equal(invalid.calls.advanced,0);assert.equal(invalid.calls.history.length,0);
+  const readonly=startupHarness('?game=bunker','durak',{writable:false});assert(readonly.calls.renders.length>0);assert(readonly.calls.renders.every(frame=>frame.view==='lobby'));assert.equal(readonly.calls.advanced,0);assert.equal(readonly.state.game,readonly.durak);
+});
+test('ordinary reload keeps existing resume and result-settlement behaviour',()=>{
+  const h=startupHarness();assert.equal(h.calls.renders[0].view,'game');assert.equal(h.calls.normalized,1);assert.equal(h.calls.advanced,1);assert.equal(h.state.game.phase,'advanced');assert.equal(h.calls.history.length,0);
+  for(const active of ['durak','bunker']){const terminal=startupHarness('',active,{terminal:true});assert.equal(terminal.calls.settled,1);assert.equal(terminal.state.game.settled,true);}
+});
 console.log(count+' main navigation checks passed');

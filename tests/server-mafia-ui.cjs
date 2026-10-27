@@ -44,3 +44,11 @@ test('all real projected lifecycles validate through every role, spectator finis
 test('personal vote analysis reports facts without attributing entire outcome to one ballot',()=>{
  const g=engine.projectGame(findRole('detective').g);g.voteFacts={total:1,againstMafia:0,againstTown:1,rows:[{round:1,target:1,name:'Марс',role:'doctor',eliminated:null,outName:null}]};const html=ui.factsMarkup(g);assert.match(html,/Против города: 1/);assert.match(html,/не определяет исход/);assert.match(html,/Доктор/);
 });
+
+test('page boot refreshes the server wallet after a confirmed empty-table load',async()=>{
+ let refreshes=0;const calls=[],app={},account={user:{id:ID},loading:false,switching:false};
+ const window={VEZDEHOT:{scopeKey:()=>ID,account:()=>account,serverMafiaRequest:async body=>{calls.push(body.op);return {ok:true,status:200,data:{status:'ok',revision:0,game:null}}}},VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT_SERVER_WALLET:{refresh:()=>{refreshes++;return Promise.resolve(true)}},localStorage:{getItem:()=>null}};
+ const document={hidden:false,getElementById:id=>id==='app'?app:null,addEventListener:()=>{}};
+ const source=fs.readFileSync('dist/server-mafia.js','utf8').replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);','window.__boot=boot;render=()=>{};connectWallet=()=>{};return;');
+ const context={window,document,Object,JSON,Number,Set,Error,Promise};vm.createContext(context);vm.runInContext(source,context);window.__boot();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,['load']);assert.equal(refreshes,1);
+});

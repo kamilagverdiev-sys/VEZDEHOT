@@ -34,3 +34,11 @@ test('early resignation text distinguishes it from a lost vote and awards no XP'
 test('projection accepts full real party lifecycle with public DTO at every phase',()=>{
  for(let n=0;n<40;n++){let seed=n+3;const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/2**32);let g=engine.createGame({id:ID,stake:n%2?100:0,difficulty:['easy','normal','hard'][n%3]},random);for(let round=0;round<12&&!g.over;round++){const pub=publicGame(g);assert.doesNotThrow(()=>ui.projection({status:'ok',revision:round,game:pub}));const a=pub.legal.actions.includes('reveal')?{type:'reveal',cardType:pub.legal.cards[0]}:pub.legal.actions.includes('vote')?{type:'vote',target:pub.legal.targets[0]}:{type:'continue'};g=engine.applyAction(g,a,random);}assert(g.over);assert.doesNotThrow(()=>ui.projection({status:'ok',revision:12,game:publicGame(g)}));}
 });
+
+test('page boot refreshes the server wallet after a confirmed empty-table load',async()=>{
+ let refreshes=0;const calls=[],app={},account={user:{id:ID},loading:false,switching:false};
+ const window={VEZDEHOT:{scopeKey:()=>ID,account:()=>account,serverBunkerRequest:async body=>{calls.push(body.op);return {ok:true,status:200,data:{status:'ok',revision:0,game:null}}}},VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT_SERVER_WALLET:{refresh:()=>{refreshes++;return Promise.resolve(true)}},localStorage:{getItem:()=>null}};
+ const document={hidden:false,getElementById:id=>id==='app'?app:null,addEventListener:()=>{}};
+ const source=fs.readFileSync('dist/server-bunker.js','utf8').replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);','window.__boot=boot;render=()=>{};connectWallet=()=>{};return;');
+ const context={window,document,Object,JSON,Number,Set,Error,Promise};vm.createContext(context);vm.runInContext(source,context);window.__boot();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,['load']);assert.equal(refreshes,1);
+});

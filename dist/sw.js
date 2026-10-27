@@ -1,8 +1,8 @@
-const CACHE = 'vezdehot-v28';
+const CACHE = 'vezdehot-v29';
 const ASSETS = [
   './', './index.html', './durak.css', './card-gestures.css', './card-gestures.js', './bunker.css', './lobby.css', './platform.css',
   './poker.html', './poker.css', './poker-equity.js', './mafia.html', './monopoly.html', './monopoly.css', './server-durak.html', './server-durak.css', './server-durak.js', './server-poker.html', './server-poker.css', './server-poker.js', './server-bunker.html', './server-bunker.css', './server-bunker.js', './server-mafia.html', './server-mafia.css', './server-mafia.js', './server-monopoly.html', './server-monopoly.css', './server-monopoly.js', './manifest.webmanifest',
-  './auth-config.js', './session-validation.js', './game-store.js', './tab-session.js', './session.css', './game-guide.js', './game-guide.css', './opponents.css', './cloud-checkpoint.js', './platform.js', './server-wallet.js', './server-wallet.css', './telegram.js', './vendor/supabase-2.118.0.js'
+  './auth-config.js', './session-validation.js', './game-store.js', './tab-session.js', './session.css', './game-guide.js', './game-guide.css', './opponents.css', './cloud-checkpoint.js', './platform.js', './server-wallet.js', './server-sessions.js', './server-wallet.css', './telegram.js', './vendor/supabase-2.118.0.js'
 ];
 const SCOPE = new URL(self.registration.scope);
 const PATHS = new Set(ASSETS.map(path => new URL(path, SCOPE).pathname));

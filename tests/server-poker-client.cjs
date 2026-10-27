@@ -8,7 +8,7 @@ function memory(){const values=new Map();return {values,getItem:k=>values.get(k)
 const card=(rank,suit='♠')=>({id:rank+suit,rank,suit,color:suit==='♥'||suit==='♦'?'red':'black'});
 function game(){return {id:ID,handId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',phase:'betting',stage:'preflop',handNumber:1,over:false,handOver:false,tableClosed:false,showdown:false,button:0,smallBlind:1,bigBlind:2,toAct:0,pot:60,paidPot:0,handProfit:0,players:[{name:'Ты',hand:[card('6'),card('K','♥')],handCount:2,chips:1000,roundBet:0,totalBet:0,folded:false,sittingOut:false},...['Лаки','Вегас','Даша'].map((name,i)=>({name,handCount:2,chips:1000-(i===0?20:i===1?40:0),roundBet:i===0?20:i===1?40:0,totalBet:i===0?20:i===1?40:0,folded:false,sittingOut:false}))],community:[],legal:{actions:['fold','call','raise','close'],callAmount:40,owed:40,minimum:80,maximum:1000},prizes:[],pots:[],history:[],tableHistory:[]}}
 const response=(revision,g=game(),status='ok')=>({ok:true,status:200,data:{status,revision,game:g}});
-function harness(request,store=memory()){let active=true;const events=[];const controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s))});return {controller,store,events,deactivate:()=>active=false}}
+function harness(request,store=memory(),options={}){let active=true;const events=[];const controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s)),...options});return {controller,store,events,deactivate:()=>active=false}}
 const flush=()=>new Promise(r=>setImmediate(r));
 
 test('lost acknowledgement persists the exact request, blocks fresh actions and replays before loading the latest table',async()=>{
@@ -156,4 +156,30 @@ test('paid setup requires a current, idle server wallet and sufficient balance',
  const wallet={phase:'saved',ready:true,busy:false,pending:false,wallet:{balance:100}};assert.equal(paidStartAvailability(wallet).allowed,true);assert.equal(paidStartAvailability({...wallet,wallet:{balance:99}}).allowed,false);
  for(const change of [{phase:'offline'},{ready:false},{busy:true},{pending:true},{wallet:null},{wallet:{balance:'100'}},{wallet:{balance:-1}}])assert.equal(paidStartAvailability({...wallet,...change}).allowed,false);
  assert.equal(paidStartAvailability(null).allowed,false);assert.match(paidStartAvailability({...wallet,wallet:{balance:0}}).reason,/бесплатно/);
+});
+
+test('confirmed empty-table loads refresh the wallet once per revision',async()=>{
+ let confirmed=0,revision=0;const h=harness(async()=>response(revision,null),memory(),{onConfirmed:()=>confirmed++});await h.controller.load();assert.equal(confirmed,1);await h.controller.load();assert.equal(confirmed,1);revision=1;await h.controller.load();assert.equal(confirmed,2);
+});
+test('insufficient funds refreshes the same-revision wallet even before the first table exists',async()=>{
+ let confirmed=0;const h=harness(async b=>b.op==='load'?response(0,null):{ok:false,status:422,data:{error:'insufficient_funds'}},memory(),{onConfirmed:()=>confirmed++});await h.controller.load();assert.equal(confirmed,1);await h.controller.start('normal',100);assert.equal(confirmed,2);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().game,null);assert.equal(h.controller.status().revision,0);assert.match(h.controller.status().notice,/списания нет/);
+});
+test('a confirmed paid entry refreshes the wallet despite a failed or stale follow-up load',async()=>{
+ for(const failure of ['network','stale']){
+  let confirmed=0,loads=0,recovered=false;const calls=[],h=harness(async b=>{calls.push(copy(b));if(b.op==='start')return response(1,paidGame(),'saved');if(++loads===1)return response(0,null);if(recovered)return response(1,paidGame());assert.equal(confirmed,2,'valid receipt refreshes before the next read');if(failure==='network')throw Error('offline');return response(0,null)},memory(),{onConfirmed:()=>confirmed++});
+  await h.controller.load();await h.controller.start('normal',100);assert.equal(confirmed,2);assert.equal(h.controller.status().revision,1);assert.equal(h.controller.status().ready,false);assert.equal(h.controller.status().pending,false);assert.equal(h.store.getItem(pendingKey),null);recovered=true;await h.controller.load();assert.equal(confirmed,2);assert.equal(h.controller.status().ready,true);assert.equal(calls.filter(b=>b.op==='start').length,1);
+ }
+});
+test('invalid entry acknowledgements never announce a wallet confirmation',async()=>{
+ for(const receipt of [response(2,paidGame(),'saved'),response(1,game(),'saved'),response(1,null,'saved')]){
+  let confirmed=0;const h=harness(async b=>b.op==='load'?response(0,null):receipt,memory(),{onConfirmed:()=>confirmed++});await h.controller.load();await h.controller.start('normal',100);assert.equal(confirmed,1);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().ready,false);
+ }
+});
+test('late acknowledgements cannot refresh a wallet after ownership is lost or the controller is destroyed',async()=>{
+ for(const close of [h=>h.deactivate(),h=>h.controller.destroy()]){
+  let confirmed=0,resolve;const h=harness(b=>b.op==='load'?Promise.resolve(response(0,null)):new Promise(r=>resolve=r),memory(),{onConfirmed:()=>confirmed++});await h.controller.load();const task=h.controller.start('normal',100);await flush();const pending=h.store.getItem(pendingKey);close(h);resolve(response(1,paidGame(),'saved'));await task;assert.equal(confirmed,1);assert.equal(h.store.getItem(pendingKey),pending);
+ }
+});
+test('wallet refresh failures do not invalidate a confirmed game read',async()=>{
+ for(const onConfirmed of [()=>{throw Error('wallet offline')},()=>Promise.reject(Error('wallet offline'))]){const h=harness(async()=>response(0,null),memory(),{onConfirmed});assert.equal(await h.controller.load(),true);assert.equal(h.controller.status().ready,true);}
 });

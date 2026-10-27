@@ -63,3 +63,11 @@ test('all confirmed stages of 100 full games render and validate, including rest
  }
  assert(count>8000);assert(finishes.has('win'));assert(finishes.has('loss'));for(const f of ['final-review','buy','rest'])assert(features.has(f),f);
 });
+
+test('page boot refreshes the server wallet after a confirmed empty-table load',async()=>{
+ let refreshes=0;const calls=[],app={},account={user:{id:ID},loading:false,switching:false};
+ const window={VEZDEHOT:{scopeKey:()=>ID,account:()=>account,serverMonopolyRequest:async body=>{calls.push(body.op);return {ok:true,status:200,data:{status:'ok',revision:0,game:null}}}},VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT_SERVER_WALLET:{refresh:()=>{refreshes++;return Promise.resolve(true)}},localStorage:{getItem:()=>null}};
+ const document={hidden:false,getElementById:id=>id==='app'?app:null,addEventListener:()=>{}};
+ const source=fs.readFileSync('dist/server-monopoly.js','utf8').replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);','window.__boot=boot;render=()=>{};connectWallet=()=>{};return;');
+ const context={window,document,Object,JSON,Number,Set,Error,Promise};vm.createContext(context);vm.runInContext(source,context);window.__boot();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,['load']);assert.equal(refreshes,1);
+});

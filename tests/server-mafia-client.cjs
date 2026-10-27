@@ -6,8 +6,57 @@ let base,engine;
 test.before(async()=>{engine=await import('../supabase/functions/server-mafia/engine.mjs');base=engine.projectGame(engine.createGame({id:ID},()=>.5));});
 const game=()=>copy(base),response=(revision,g=game(),status='ok')=>({ok:true,status:200,data:{status,revision,game:g}});
 function memory(){const values=new Map();return {values,getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)}}
-function harness(request,store=memory()){let active=true;const events=[],controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s))});return {controller,store,events,deactivate:()=>active=false};}
+function harness(request,store=memory(),options={}){let active=true;const events=[],controller=createController({scope:SCOPE,current:()=>active,storage:store,uuid:()=>ID,request,onChange:s=>events.push(copy(s)),...options});return {controller,store,events,deactivate:()=>active=false};}
 const reveal={type:'mark',target:1,mark:'suspect'},flush=()=>new Promise(r=>setImmediate(r));
+
+test('confirmed empty and same-revision loads refresh the wallet once',async()=>{
+ let confirmed=0;const h=harness(async()=>response(6,null),memory(),{onConfirmed:()=>confirmed++});
+ await h.controller.load();await h.controller.load();
+ assert.equal(confirmed,1);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().game,null);
+});
+test('insufficient funds refreshes the same-revision wallet and clears an uncharged entry',async()=>{
+ const calls=[];let confirmed=0;
+ const h=harness(async body=>{calls.push(copy(body));return body.op==='load'?response(6,null):{ok:false,status:422,data:{error:'insufficient_funds'}}},memory(),{onConfirmed:()=>confirmed++});
+ await h.controller.load();assert.equal(confirmed,1);
+ await h.controller.start('normal',100);
+ assert.equal(confirmed,2);assert.equal(h.controller.status().game,null);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,true);assert.equal(h.store.getItem(pendingKey),null);
+ assert.match(h.controller.status().notice,/списания нет|не списаны/);assert.match(h.controller.status().notice,/бесплатную практику/);assert.deepEqual(calls.map(body=>body.op),['load','start','load']);
+});
+test('valid ACK refreshes the wallet before stale or failed read and does not replay the accepted move',async()=>{
+ for(const failure of ['stale','offline']){
+  let revision=4,afterAck=false,confirmed=0;const calls=[];
+  const h=harness(async body=>{calls.push(body.op);if(body.op==='load'){if(afterAck&&failure==='offline')throw Error('Read lost');return response(revision)}afterAck=true;return response(5,game(),'saved')},memory(),{onConfirmed:()=>{confirmed++;return Promise.reject(Error('Wallet offline'))}});
+  await h.controller.load();await h.controller.load();assert.equal(confirmed,1);
+  await h.controller.act(reveal);
+  assert.equal(confirmed,2);assert.equal(h.controller.status().revision,5);assert.equal(h.controller.status().pending,false);assert.equal(h.controller.status().ready,false);assert.equal(h.store.getItem(pendingKey),null);
+  afterAck=false;revision=5;await h.controller.load();assert.equal(confirmed,2);assert.equal(h.controller.status().ready,true);
+  revision=6;await h.controller.load();assert.equal(confirmed,3);assert.equal(calls.filter(op=>op==='action').length,1);
+ }
+});
+test('invalid acknowledgement never announces a wallet change',async()=>{
+ for(const bad of [()=>response(2,null,'saved'),()=>response(3,game(),'saved'),()=>response(2,{...game(),id:SCOPE},'saved'),()=>response(2,game(),'ok')]){
+  let confirmed=0;const h=harness(async body=>body.op==='load'?response(1):bad(),memory(),{onConfirmed:()=>confirmed++});
+  await h.controller.load();await h.controller.act(reveal);
+  assert.equal(confirmed,1);assert.equal(h.controller.status().pending,true);assert.equal(h.controller.status().revision,1);assert(h.store.getItem(pendingKey));
+ }
+});
+test('account loss and destruction suppress late wallet callbacks and preserve pending actions',async()=>{
+ for(const stop of ['deactivate','destroy']){
+  let resolve,confirmed=0;const h=harness(body=>body.op==='load'?Promise.resolve(response(1)):new Promise(done=>resolve=done),memory(),{onConfirmed:()=>confirmed++});
+  await h.controller.load();assert.equal(confirmed,1);const action=h.controller.act(reveal);await flush();const stored=h.store.getItem(pendingKey);assert(stored);
+  if(stop==='destroy')h.controller.destroy();else h.deactivate();
+  resolve(response(2,game(),'saved'));await action;
+  assert.equal(confirmed,1);assert.equal(h.store.getItem(pendingKey),stored);assert.equal(h.controller.status().revision,1);
+  let resolveLoad,lateConfirmed=0;const late=harness(()=>new Promise(done=>resolveLoad=done),memory(),{onConfirmed:()=>lateConfirmed++}),load=late.controller.load();await flush();
+  if(stop==='destroy')late.controller.destroy();else late.deactivate();
+  resolveLoad(response(6,null));await load;assert.equal(lateConfirmed,0);
+ }
+});
+test('a synchronous wallet refresh failure does not block confirmed game restoration',async()=>{
+ const h=harness(async()=>response(6),memory(),{onConfirmed:()=>{throw Error('Wallet unavailable')}});
+ assert.equal(await h.controller.load(),true);assert.equal(h.controller.status().ready,true);assert.equal(h.controller.status().revision,6);
+});
+
 test('lost personal mark acknowledgement is replayed exactly once before reading the latest revision',async()=>{
  const store=memory(),calls=[],first=harness(async b=>{calls.push(copy(b));if(b.op==='load')return response(2);throw Error('Lost response')},store);
  await first.controller.load();await first.controller.act(reveal);const staged=store.getItem(pendingKey);assert(staged);assert.equal(first.controller.status().pending,true);await first.controller.act({type:'resign'});assert.equal(calls.filter(c=>c.op==='action').length,1);

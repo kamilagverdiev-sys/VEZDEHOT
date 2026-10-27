@@ -41,6 +41,45 @@ function harness(initial=game()){
  return {document,window,ui,starts,actions,gestureBindings,query:s=>document.querySelector(s),all:s=>document.querySelectorAll(s),setState:change=>{state={...state,...change};if(Object.hasOwn(change,'game'))current=change.game;ui.setState(state);ui.render()},setRemoteGame:g=>current=g,setAccount:id=>{account={...account,user:id?{id}:null};ui.setOwner(id);ui.render()},setTab:allowed=>{tabWritable=allowed;ui.render()},setWallet:change=>{wallet={...wallet,...change};walletSubscriber?.(wallet)},counts:()=>({legacyWrites,mounts,refreshes})};
 }
 
+// Run the entire client for lifecycle regressions, including boot, real durable
+// controller and event listeners. Rendering-only tests above cannot catch a
+// controller created while its document is hidden.
+function lifecycleHarness(request){
+ const document=documentModel(),listeners=new Map(),values=new Map(),calls=[];
+ document.addEventListener=(event,fn)=>{if(!listeners.has(event))listeners.set(event,[]);listeners.get(event).push(fn)};
+ const dispatch=event=>{for(const fn of listeners.get(event)||[])fn()};
+ const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+ const window={localStorage:storage,addEventListener(){},VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT:{ready:Promise.resolve(),account:()=>({user:{id:SCOPE},loading:false,switching:false}),scopeKey:()=>SCOPE,getProfile:()=>({nick:'Игрок'}),openAccount(){},serverDurakRequest:body=>{calls.push(copy(body));return request(body)}}};
+ const ctx={window,document,crypto:{randomUUID:()=>ID},Object,Number,String,JSON,Set,Error,Promise};vm.createContext(ctx);vm.runInContext(source,ctx);
+ return {calls,storage,query:selector=>document.querySelector(selector),all:selector=>document.querySelectorAll(selector),dispatch,setHidden:value=>{document.hidden=value;dispatch('visibilitychange')}};
+}
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
+const reply=(revision,g,status='ok')=>({ok:true,status:200,data:{status,revision,game:g}});
+
+test('a background profile update cannot strand Durak on return to the same account',async()=>{
+ let current=game(3),revision=1;
+ const h=lifecycleHarness(async()=>reply(revision,current));await flush();
+ assert.equal(h.calls.length,1);assert(h.all('[data-card]').every(card=>!card.disabled));
+ h.setHidden(true);h.dispatch('vezdehot:profile');h.dispatch('vezdehot:sessionactive');await flush();
+ assert.equal(h.calls.length,1);
+ current=game(2);revision=4;h.setHidden(false);await flush();
+ assert.deepEqual(h.calls,[{op:'load'},{op:'load'}]);
+ assert.equal(h.all('[data-card]').length,2);assert(h.all('[data-card]').every(card=>!card.disabled));
+ assert.match(h.query('.sd-sync').textContent,/Ходы сохранены/);
+});
+test('a hidden-table return replays its pending move once and ignores the late old acknowledgement',async()=>{
+ let finishOld,loaded=0,actions=0;const first=game(3),latest=game(2),key='vezdehot:server-durak:pending:v1:'+SCOPE;
+ const h=lifecycleHarness(body=>{if(body.op==='load')return Promise.resolve(reply(++loaded===1?1:4,loaded===1?first:latest));return ++actions===1?new Promise(resolve=>finishOld=resolve):Promise.resolve(reply(2,latest,'saved'))});
+ await flush();h.all('[data-card]')[0].click();h.query('[data-play]').click();await flush();
+ const staged=h.storage.getItem(key);assert(staged);assert.equal(actions,1);
+ h.setHidden(true);h.dispatch('vezdehot:profile');finishOld(reply(2,latest,'saved'));await flush();
+ assert.equal(h.storage.getItem(key),staged);assert.equal(h.all('[data-card]').length,3);assert.equal(actions,1);
+ h.setHidden(false);await flush();
+ assert.deepEqual(h.calls.filter(body=>body.op==='action'),[JSON.parse(staged),JSON.parse(staged)]);
+ assert.deepEqual(h.calls.map(body=>body.op),['load','action','action','load']);
+ assert.equal(h.storage.getItem(key),null);assert.equal(h.all('[data-card]').length,2);assert(h.all('[data-card]').every(card=>!card.disabled));
+});
+
 test('selecting a far card preserves the exact hand, card and battle nodes, focus, scroll and journal',()=>{
  const g=game();g.table=[{a:{rank:'6',suit:'♦',id:'6♦'},d:{rank:'7',suit:'♦',id:'7♦'}}];const h=harness(g),hand=h.query('.sd-hand'),card=h.all('[data-card]')[12],battle=h.query('.sd-battle'),pair=h.query('.sd-pair'),bindings=h.gestureBindings.length;hand.scrollLeft=470;h.query('[data-rules]').open=true;h.query('[data-journal]').open=true;h.query('.sd-journal ol').scrollTop=81;card.focus();card.click();
  const selected=h.all('[data-card]')[12];assert.equal(h.query('.sd-hand'),hand);assert.equal(selected,card);assert.equal(h.query('.sd-battle'),battle);assert.equal(h.query('.sd-pair'),pair);assert.equal(h.gestureBindings.length,bindings);assert.equal(h.query('.sd-hand').scrollLeft,470);assert.equal(h.document.activeElement,selected);assert.equal(selected.getAttribute('aria-pressed'),'true');assert(h.query('[data-rules]').open);assert(h.query('[data-journal]').open);assert.equal(h.query('.sd-journal ol').scrollTop,81);assert.equal(h.actions.length,0);

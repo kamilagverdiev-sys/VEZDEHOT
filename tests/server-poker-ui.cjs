@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const raw=fs.readFileSync('dist/server-poker.js','utf8');
-const source=raw.replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);',`window.__UI={setup,economyPanel,render,bind,updateSetup,connectWallet,refreshWalletFor,resultTitle,resultReason,raisePresets,announceTransition,setState:s=>{view=s},setOwner:s=>{owner=s},setController:c=>{controller=c},setStake:n=>{setupStake=n}};return;`);
+const source=raw.replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);',`window.__UI={setup,economyPanel,render,bind,updateSetup,connectWallet,refreshConfirmedWallet,resultTitle,resultReason,raisePresets,announceTransition,setState:s=>{view=s},setOwner:s=>{owner=s},setController:c=>{controller=c},setStake:n=>{setupStake=n}};return;`);
 const ID='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 function fixture(){return {id:ID,handId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',phase:'betting',stage:'preflop',handNumber:1,over:false,handOver:false,tableClosed:false,showdown:false,button:0,smallBlind:1,bigBlind:2,toAct:0,pot:60,paidPot:0,handProfit:0,community:[],history:[],tableHistory:[],pots:[],prizes:[],players:[{name:'Ты',chips:1000,roundBet:0,handCount:2,hand:[{id:'A♠',rank:'A',suit:'♠'},{id:'K♥',rank:'K',suit:'♥'}]},...['Лаки','Даша','Вегас'].map(name=>({name,chips:1000,roundBet:0,handCount:2}))],legal:{actions:['fold','call'],callAmount:40,owed:40,minimum:80,maximum:1000},economy:{version:1,stake:100,settled:false,payout:0,xp:0,outcome:null}};}
 const ready=(game=null,revision=0)=>({phase:'saved',game,revision,ready:true,busy:false,pending:false});
@@ -25,11 +25,9 @@ test('wallet updates only toggle paid controls; a stale, low or pending wallet c
  for(const state of [{phase:'saved',ready:true,pending:false,wallet:{balance:99}},{phase:'saved',ready:true,pending:true,wallet:{balance:1000}},{phase:'loading',ready:false,pending:false,wallet:{balance:1000}}]){h.wallet.state=state;h.wallet.subscriber(state);assert.equal(start.disabled,true);start.onclick();assert.equal(h.calls.length,1);assert.equal(h.app.innerHTML,original);}
  assert.equal(h.wallet.refreshes,0);
 });
-test('wallet is mounted once and refreshes only after each new saved table revision',()=>{
- const h=harness();h.ui.connectWallet();h.ui.connectWallet();assert.equal(h.wallet.mounts,1);
- h.ui.refreshWalletFor(ready());assert.equal(h.wallet.refreshes,0);const state=ready(fixture(),1);h.ui.refreshWalletFor(state);h.ui.refreshWalletFor(state);assert.equal(h.wallet.refreshes,1);
- h.ui.refreshWalletFor({...state,revision:2,busy:true,ready:false});h.ui.refreshWalletFor({...state,revision:2,pending:true});h.ui.refreshWalletFor({...state,revision:2,phase:'offline'});assert.equal(h.wallet.refreshes,1);
- h.ui.refreshWalletFor({...state,revision:2});assert.equal(h.wallet.refreshes,2);h.ui.setOwner('another-account');h.ui.refreshWalletFor({...state,revision:3});assert.equal(h.wallet.refreshes,2);
+test('confirmed wallet refresh stays within the current account and active tab',()=>{
+ const h=harness();h.ui.connectWallet();h.ui.connectWallet();assert.equal(h.wallet.mounts,1);h.ui.refreshConfirmedWallet();assert.equal(h.wallet.refreshes,1);
+ h.ui.setOwner('another-account');h.ui.refreshConfirmedWallet();assert.equal(h.wallet.refreshes,1);h.ui.setOwner(ID);h.document.hidden=true;h.ui.refreshConfirmedWallet();assert.equal(h.wallet.refreshes,1);h.document.hidden=false;h.window.VEZDEHOT_TAB_SESSION.canWrite=()=>false;h.ui.refreshConfirmedWallet();assert.equal(h.wallet.refreshes,1);
 });
 test('paid close is absent during a hand and appears only when server legal actions permit it',()=>{
  const h=harness(),g=fixture();h.ui.setState(ready(g,1));h.ui.render();assert.doesNotMatch(h.app.innerHTML,/data-close\b/);assert.doesNotMatch(h.app.innerHTML,/РАСЧЁТ СТОЛА ПОДТВЕРЖДЁН/);assert.match(h.app.innerHTML,/после раздачи/);
@@ -79,4 +77,12 @@ test('result focus happens once on a confirmed hand transition, never on ordinar
 });
 test('a free table closed before showdown no longer calculates or shows a live winning chance',()=>{
  const h=harness(),g=fixture();g.over=true;g.tableClosed=true;g.phase='over';g.legal.actions=[];g.economy={version:1,stake:0,settled:true,payout:0,xp:0,outcome:'resigned'};assert.equal(h.window.VEZDEHOT_SERVER_POKER.equityInput(g),null);h.ui.setState(ready(g,4));h.ui.render();assert.doesNotMatch(h.app.innerHTML,/data-equity|Победа без дележа/);assert.match(h.app.innerHTML,/Этот стол закрыт/);
+});
+
+test('page boot refreshes the server wallet after a confirmed empty-table load',async()=>{
+ let refreshes=0;const calls=[],app={},account={user:{id:ID},loading:false,switching:false};
+ const window={VEZDEHOT:{scopeKey:()=>ID,account:()=>account,serverPokerRequest:async body=>{calls.push(body.op);return {ok:true,status:200,data:{status:'ok',revision:0,game:null}}}},VEZDEHOT_TAB_SESSION:{canWrite:()=>true},VEZDEHOT_SERVER_WALLET:{refresh:()=>{refreshes++;return Promise.resolve(true)}},localStorage:{getItem:()=>null}};
+ const document={hidden:false,getElementById:id=>id==='app'?app:null,addEventListener:()=>{}};
+ const source=fs.readFileSync('dist/server-poker.js','utf8').replace('Promise.resolve(window.VEZDEHOT?.ready).then(boot);','window.__boot=boot;render=()=>{};connectWallet=()=>{};return;');
+ const context={window,document,Object,JSON,Number,Set,Error,Promise};vm.createContext(context);vm.runInContext(source,context);window.__boot();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,['load']);assert.equal(refreshes,1);
 });
